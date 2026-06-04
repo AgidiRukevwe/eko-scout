@@ -1,0 +1,7 @@
+geopy
+h3
+pandas
+SQLAlchemy
+
+requests
+python-dotenv

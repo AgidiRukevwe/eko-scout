@@ -74,56 +74,23 @@ async function fetchNearbyAccessibility(lat: number, lng: number, radius = 5000)
 
 }
 
-// Electricity intelligence – discrete zone lookup using electricity_h3_features
+// Electricity intelligence – nearest neighbor lookup using centroids
 async function fetchElectricityIntelligence(lat: number, lng: number) {
-  const { h3_r9: baseCell } = enrich_with_h3(lat, lng);
-
-  // Exact match first
-  let rows = await safeQuery<any>(
-    `
-    SELECT *
+// baseCell not needed for distance query
+  const distanceSql = `
+    SELECT *, (6371000 * acos(
+      cos(radians($1)) * cos(radians(centroid_lat)) *
+      cos(radians(centroid_lng) - radians($2)) +
+      sin(radians($1)) * sin(radians(centroid_lat))
+    )) AS distance_m
     FROM electricity_h3_features
-    WHERE h3_index = $1
-    `,
-    [baseCell]
-  );
-
-  if (rows?.length) {
-    return {
-      row: rows[0],
-      expansion: 0,
-    };
-  }
-
-  // Expand outward until we find a coverage cell
-  const maxRing = 20;
-
-  for (let k = 1; k <= maxRing; k++) {
-    const candidateCells = h3.gridDisk(baseCell, k) as string[];
-
-    rows = await safeQuery<any>(
-      `
-      SELECT *
-      FROM electricity_h3_features
-      WHERE h3_index = ANY($1::text[])
-      ORDER BY confidence_score DESC
-      LIMIT 1
-      `,
-      [candidateCells]
-    );
-
-    if (rows?.length) {
-      return {
-        row: rows[0],
-        expansion: k,
-      };
-    }
-  }
-
-  return {
-    row: null,
-    expansion: null,
-  };
+    ORDER BY distance_m ASC
+    LIMIT 2;
+  `;
+  const rows = await safeQuery<any>(distanceSql, [lat, lng]);
+  const dominant = rows[0] ?? null;
+  const secondary = rows[1] && rows[1].distance_m <= 5000 ? rows[1] : null;
+  return { dominant, secondary };
 }
 
 // Helper to convert degrees to radians
@@ -149,32 +116,33 @@ export async function GET(req: Request) {
   // Environmental intelligence (h3_r9_features) – expand up to k=3.
   const env = await fetchWithExpansion<any>("h3_r9_features", h3_r9, 3);
 
-  // Electricity intelligence – use h3_staging_power with neighbor expansion (k=0..2)
-  const electricity = await fetchElectricityIntelligence(lat, lng);
-  // fetchElectricityIntelligence returns { row: object | null, expansion: null }
-  // We'll embed the row directly in the response.
+// Electricity intelligence – nearest neighbor lookup using centroids
+const electricityResult = await fetchElectricityIntelligence(lat, lng);
+// dominant and secondary records (may be null)
+const electricity = {
+  dominant: electricityResult.dominant,
+  secondary: electricityResult.secondary
+};
 
+// Flood intelligence – exact match only, null if absent.
+const flood = await fetchRow<any>("flood", h3_r9);
 
-  // Flood intelligence – exact match only, null if absent.
-  const flood = await fetchRow<any>("flood", h3_r9);
+// Nearby accessibility – use configurable radius.
+const nearby = await fetchNearbyAccessibility(lat, lng, radius);
 
-  // Nearby accessibility – use configurable radius.
-  const nearby = await fetchNearbyAccessibility(lat, lng, radius);
-
-  const response = {
-    location: { lat, lng, h3_r9 },
-    environmental_intelligence: env.row,
-    environmental_expansion: env.expansion, // 0 = exact, 1‑3 = expanded, null = not found
-    electricity_intelligence: electricity.row,
-    electricity_expansion: electricity.expansion,
-    // flood_intelligence: flood ?? null,
-    nearby_accessibility: nearby,
-    confidence: {
-      environmental: env.row?.confidence_score ?? null,
-      electricity: electricity.row?.confidence_score ?? null,
-      flood: flood?.confidence_score ?? null
-    }
-  };
+const response = {
+  location: { lat, lng, h3_r9 },
+  environmental_intelligence: env.row,
+  environmental_expansion: env.expansion, // 0 = exact, 1‑3 = expanded, null = not found
+  electricity_intelligence: electricity,
+  // flood_intelligence: flood ?? null,
+  nearby_accessibility: nearby,
+  confidence: {
+    environmental: env.row?.confidence_score ?? null,
+    electricity: electricity.dominant?.confidence_score ?? null,
+    flood: flood?.confidence_score ?? null
+  }
+};
 
   return NextResponse.json(response);
 }

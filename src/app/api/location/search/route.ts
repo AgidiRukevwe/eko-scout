@@ -79,10 +79,16 @@
   }
 
   const isInLagos = (lat: number, lng: number): boolean => {
-    const minLat = 6.45;
-    const maxLat = 6.80;
-    const minLng = 3.15;
-    const maxLng = 3.60;
+    // const minLat = 6.45;
+    // const maxLat = 6.80;
+    // const minLng = 3.15;
+    // const maxLng = 3.60;
+
+    const minLat = 6.20;
+const maxLat = 6.95;
+const minLng = 2.70;
+const maxLng = 4.20;
+
     return lat >= minLat && lat <= maxLat && lng >= minLng && lng <= maxLng;
   };
 

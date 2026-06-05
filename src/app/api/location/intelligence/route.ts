@@ -4,6 +4,28 @@ import { safeQuery } from "@/lib/db";
 import { enrich_with_h3 } from "@/core/h3_utils";
 import * as h3 from "h3-js";
 
+// ---------- Types ----------
+/** Row returned from the electricity_h3_features table */
+interface ElectricityRow {
+  h3_index: string;
+  centroid_lat: number;
+  centroid_lng: number;
+  confidence_score?: number;
+  distance_m?: number;
+}
+/** Result of fetchElectricityIntelligence */
+interface ElectricityResult {
+  dominant: ElectricityRow | null;
+  secondary: ElectricityRow | null;
+}
+/** Generic row type for H3 feature tables */
+interface H3FeatureRow {
+  h3_r9: string;
+  confidence_score?: number;
+  [key: string]: any;
+}
+
+
 /**
  * Helper to fetch a row from a table for a given H3 cell.
  * Returns the row if found, otherwise null.
@@ -74,9 +96,16 @@ async function fetchNearbyAccessibility(lat: number, lng: number, radius = 5000)
 
 }
 
-// Electricity intelligence – nearest neighbor lookup using centroids
-async function fetchElectricityIntelligence(lat: number, lng: number) {
-// baseCell not needed for distance query
+async function fetchElectricityIntelligence(lat: number, lng: number): Promise<ElectricityResult> {
+  // Determine the base H3 cell at resolution 9 for the location
+  const baseCell = h3.latLngToCell(lat, lng, 9);
+  // Get a set of nearby cells (radius 3 rings) to limit the search space
+  const nearbyCells = h3.gridDisk(baseCell, 3) as string[];
+  if (nearbyCells.length === 0) {
+    return { dominant: null, secondary: null };
+  }
+  // Build placeholders for the IN clause ($3, $4, ...)
+  const placeholders = nearbyCells.map((_, i) => `$${i + 3}`).join(', ');
   const distanceSql = `
     SELECT *, (6371000 * acos(
       cos(radians($1)) * cos(radians(centroid_lat)) *
@@ -84,27 +113,21 @@ async function fetchElectricityIntelligence(lat: number, lng: number) {
       sin(radians($1)) * sin(radians(centroid_lat))
     )) AS distance_m
     FROM electricity_h3_features
+    WHERE h3_index IN (${placeholders})
     ORDER BY distance_m ASC
     LIMIT 2;
   `;
-  const rows = await safeQuery<any>(distanceSql, [lat, lng]);
+  const rows = await safeQuery<ElectricityRow>(distanceSql, [lat, lng, ...nearbyCells]);
   const dominant = rows[0] ?? null;
-  const secondary = rows[1] && rows[1].distance_m <= 5000 ? rows[1] : null;
+  const secondary = rows[1] && rows[1].distance_m && rows[1].distance_m <= 5000 ? rows[1] : null;
   return { dominant, secondary };
 }
-
-// Helper to convert degrees to radians
-function toRadians(deg: number) {
-  return (deg * Math.PI) / 180;
-}
-
-
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const lat = Number(searchParams.get("lat"));
   const lng = Number(searchParams.get("lng"));
-  const radius = Number(searchParams.get("radius")) || 2000; // for nearby query, default 2 km
+  const radius = Number(searchParams.get("radius")) || 2000; // default 2 km for nearby queries
 
   if (Number.isNaN(lat) || Number.isNaN(lng)) {
     return NextResponse.json({ error: "Missing or invalid lat/lng parameters" }, { status: 400 });
@@ -113,36 +136,31 @@ export async function GET(req: Request) {
   // Compute H3 R9 cell.
   const { h3_r9 } = enrich_with_h3(lat, lng);
 
-  // Environmental intelligence (h3_r9_features) – expand up to k=3.
-  const env = await fetchWithExpansion<any>("h3_r9_features", h3_r9, 3);
+  // Environmental intelligence – expand up to 3 rings.
+  const env = await fetchWithExpansion<H3FeatureRow>("h3_r9_features", h3_r9, 3);
 
-// Electricity intelligence – nearest neighbor lookup using centroids
-const electricityResult = await fetchElectricityIntelligence(lat, lng);
-// dominant and secondary records (may be null)
-const electricity = {
-  dominant: electricityResult.dominant,
-  secondary: electricityResult.secondary
-};
+  // Electricity intelligence – limited to nearby H3 cells.
+  const electricity = await fetchElectricityIntelligence(lat, lng);
 
-// Flood intelligence – exact match only, null if absent.
-const flood = await fetchRow<any>("flood", h3_r9);
+  // Flood intelligence – exact match.
+  const flood = await fetchRow<any>("flood", h3_r9);
 
-// Nearby accessibility – use configurable radius.
-const nearby = await fetchNearbyAccessibility(lat, lng, radius);
+  // Nearby accessibility – aggregated per category.
+  const nearby = await fetchNearbyAccessibility(lat, lng, radius);
 
-const response = {
-  location: { lat, lng, h3_r9 },
-  environmental_intelligence: env.row,
-  environmental_expansion: env.expansion, // 0 = exact, 1‑3 = expanded, null = not found
-  electricity_intelligence: electricity,
-  // flood_intelligence: flood ?? null,
-  nearby_accessibility: nearby,
-  confidence: {
-    environmental: env.row?.confidence_score ?? null,
-    electricity: electricity.dominant?.confidence_score ?? null,
-    flood: flood?.confidence_score ?? null
-  }
-};
+  const response = {
+    location: { lat, lng, h3_r9 },
+    environmental_intelligence: env.row,
+    environmental_expansion: env.expansion,
+    electricity_intelligence: electricity,
+    // flood_intelligence: flood ?? null,
+    nearby_accessibility: nearby,
+    confidence: {
+      environmental: env.row?.confidence_score ?? null,
+      electricity: electricity.dominant?.confidence_score ?? null,
+      flood: flood?.confidence_score ?? null
+    }
+  };
 
   return NextResponse.json(response);
 }

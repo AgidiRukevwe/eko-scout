@@ -2,6 +2,7 @@
   "name": "eko-scout",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -10,10 +11,12 @@
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
+    "dotenv": "^16.6.1",
     "h3-js": "^4.4.0",
     "lucide-react": "^1.16.0",
     "next": "16.2.6",
     "openai": "^6.39.0",
+    "pg": "^8.12.0",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },

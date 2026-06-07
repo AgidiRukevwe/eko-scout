@@ -1,0 +1,5 @@
+[
+  { "id": "ikeja", "name": "Ikeja", "parentArea": "Lagos Mainland", "lat": 6.6067, "lng": 3.3515 },
+  { "id": "victoria_island", "name": "Victoria Island", "parentArea": "Lagos Island", "lat": 6.4263, "lng": 3.4280 },
+  { "id": "lekki", "name": "Lekki", "parentArea": "Lagos Mainland", "lat": 6.4539, "lng": 3.5830 }
+]

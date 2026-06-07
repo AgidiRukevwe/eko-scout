@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { sql, isDbConfigured } from "@/lib/db";
-import { lagosLocations } from "../../../lib/lagosData";
+
+const lagosLocations: any[] = [];
 
 export async function POST(req: Request) {
   try {

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
+import { ResolvedLocation } from "@/lib/locationResolver";
 import OpenAI from "openai";
-import { resolveLocation, ResolvedLocation } from "@/lib/locationResolver";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface ChatMessage {
   role: "user" | "assistant" | "system";
@@ -15,249 +17,413 @@ interface UserPriorities {
   powerReliability: boolean;
 }
 
-// Disable static rendering for API route (make it dynamic)
+interface LocationIntelligence {
+  location: { lat: number; lng: number; h3_r9: string };
+  environmental_intelligence: Record<string, any> | null;
+  environmental_expansion: number | null;
+  electricity_intelligence: {
+    dominant: Record<string, any> | null;
+    secondary: Record<string, any> | null;
+  };
+  nearby_accessibility: Record<string, { count: number; nearest_distance_meters: number | null }>;
+  confidence: { environmental: number | null; electricity: number | null; flood: number | null };
+}
+
+interface NearbyResults {
+  [category: string]: { count: number; nearest_distance_meters: number };
+}
+
+// ─── Config ───────────────────────────────────────────────────────────────────
+
 export const dynamic = "force-dynamic";
+
+let _openai: OpenAI | null = null;
+function getOpenAI(): OpenAI | null {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) return null;
+  if (!_openai) _openai = new OpenAI({ apiKey: key });
+  return _openai;
+}
+
+// ─── Server-side data fetchers ────────────────────────────────────────────────
+
+/**
+ * Fetch full location intelligence from our own /intelligence endpoint.
+ * Always called server-side — eliminates the frontend race condition.
+ */
+async function fetchIntelligence(lat: number, lng: number, origin: string): Promise<LocationIntelligence | null> {
+  try {
+    const res = await fetch(`${origin}/api/location/intelligence?lat=${lat}&lng=${lng}`, {
+      // Don't cache — we want fresh data every message
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    return await res.json() as LocationIntelligence;
+  } catch (err) {
+    console.error("Intelligence fetch error:", err);
+    return null;
+  }
+}
+
+
+/**
+ * Fetch nearby POIs from the /nearby endpoint.
+ * Always called when a location is pinned — provides category counts + nearest distances.
+ */
+async function fetchNearby(lat: number, lng: number, origin: string, radius = 5000): Promise<NearbyResults | null> {
+  try {
+    const res = await fetch(`${origin}/api/location/nearby?lat=${lat}&lng=${lng}&radius=${radius}`, {
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.results ?? null;
+  } catch (err) {
+    console.error("Nearby fetch error:", err);
+    return null;
+  }
+}
+
+// ─── System prompt builder ────────────────────────────────────────────────────
+
+function buildSystemPrompt(
+  priorities: UserPriorities,
+  location: ResolvedLocation | null,
+  intelligence: LocationIntelligence | null,
+  nearby: NearbyResults | null
+): string {
+  const persona = `You are EkoScout 🏙️ — a trusted local analyst and data-driven guide for housing decisions in Lagos, Nigeria.
+Your role is to help users make informed decisions about living, working, or renting in Lagos based on real location intelligence data.
+
+CONVERSATION STYLE:
+- Be concise, practical, and decision-focused. The ideal response length for most questions is 2–5 sentences.
+- Answer the user's specific question first, then provide only the most relevant supporting information.
+- Prioritize insights over raw metrics. Translate technical data into real-world implications (e.g., "This is a predominantly residential area with relatively low traffic and a quieter environment than nearby commercial districts.").
+- Keep responses conversational and natural. Avoid filler, unnecessary follow-up questions, and generic Lagos commentary.
+- Do not generate report-style outputs unless the user explicitly asks for a full analysis. Avoid dumping multiple scores or datasets. Mention confidence levels only when uncertainty is important to the answer.
+- If data is unavailable, explicitly state what is missing instead of making generic guesses (e.g., "I could not find a gym within the currently indexed dataset...").`;
+
+  const activePriorities: string[] = [];
+  if (priorities.workFromHome) activePriorities.push("works from home (internet + power critical)");
+  if (priorities.floodSensitive) activePriorities.push("flood-sensitive");
+  if (priorities.commuteStress) activePriorities.push("worried about commute/traffic");
+  if (priorities.noiseSensitive) activePriorities.push("noise-sensitive");
+  if (priorities.powerReliability) activePriorities.push("power reliability is a priority");
+  const prioritySection = activePriorities.length > 0
+    ? `\nUSER PRIORITIES: ${activePriorities.join(", ")}.\n`
+    : "";
+
+  if (!location) {
+    return `${persona}${prioritySection}
+No location is pinned yet. Guide the user to type @ and select a Lagos neighbourhood so you can give real, data-backed intelligence.`;
+  }
+
+  const locationHeader = `\n═══ ACTIVE LOCATION ═══
+Name: ${location.name}${location.parentArea ? ` (${location.parentArea})` : ""}
+Coordinates: ${location.lat}, ${location.lng}`;
+
+  // ── Format intelligence data ──
+  let intelligenceSection = "\n═══ LIVE DATABASE INTELLIGENCE ═══\n";
+
+  if (!intelligence) {
+    intelligenceSection += "⚠ No intelligence data available for this location. Be transparent about this.\n";
+  } else {
+    const env = intelligence.environmental_intelligence;
+    const elec = intelligence.electricity_intelligence;
+    const nearbyAccess = intelligence.nearby_accessibility;
+
+    // Environmental features
+    intelligenceSection += "\n── Environmental Features ──\n";
+    if (env) {
+      const envFields = Object.entries(env)
+        .filter(([k]) => !k.startsWith("h3") && !k.startsWith("centroid") && !k.startsWith("id"))
+        .filter(([, v]) => v !== null && v !== undefined);
+      if (envFields.length > 0) {
+        envFields.forEach(([k, v]) => {
+          intelligenceSection += `  ${k.replace(/_/g, " ")}: ${v}\n`;
+        });
+        if (intelligence.environmental_expansion != null && intelligence.environmental_expansion > 0) {
+          intelligenceSection += `  (data sourced from ${intelligence.environmental_expansion} H3 ring(s) away — proximity: approximate)\n`;
+        }
+      } else {
+        intelligenceSection += "  No environmental feature data.\n";
+      }
+    } else {
+      intelligenceSection += "  No environmental data found for this H3 cell.\n";
+    }
+
+    // Electricity intelligence
+    intelligenceSection += "\n── Electricity ──\n";
+    if (elec.dominant) {
+      intelligenceSection += `  Confidence score: ${elec.dominant.confidence_score ?? "N/A"}\n`;
+      if (elec.dominant.distance_m != null) {
+        intelligenceSection += `  Nearest electricity feature: ${Math.round(Number(elec.dominant.distance_m))} m\n`;
+      }
+      // Include all other non-null fields from the dominant row
+      Object.entries(elec.dominant)
+        .filter(([k]) => !["h3_index", "centroid_lat", "centroid_lng", "distance_m", "confidence_score"].includes(k))
+        .filter(([, v]) => v !== null)
+        .forEach(([k, v]) => {
+          intelligenceSection += `  ${k.replace(/_/g, " ")}: ${v}\n`;
+        });
+      if (elec.secondary?.confidence_score != null) {
+        intelligenceSection += `  Secondary cell confidence: ${elec.secondary.confidence_score}\n`;
+      }
+    } else {
+      intelligenceSection += "  No electricity data for this cell.\n";
+    }
+
+    // Nearby accessibility from intelligence endpoint (5 km radius)
+    const accessItems = Object.entries(nearbyAccess).filter(([, v]) => v.count > 0);
+    intelligenceSection += "\n── Nearby Accessibility (5 km radius, from intelligence endpoint) ──\n";
+    if (accessItems.length > 0) {
+      accessItems.forEach(([cat, v]) => {
+        const dist = v.nearest_distance_meters != null ? `, nearest: ${Math.round(v.nearest_distance_meters)} m` : "";
+        intelligenceSection += `  ${cat.replace(/_/g, " ")}: ${v.count} found${dist}\n`;
+      });
+    } else {
+      intelligenceSection += "  No nearby amenity data.\n";
+    }
+
+    // Confidence summary
+    intelligenceSection += `\n── Data Confidence ──\n`;
+    intelligenceSection += `  Environmental: ${intelligence.confidence.environmental ?? "N/A"}\n`;
+    intelligenceSection += `  Electricity: ${intelligence.confidence.electricity ?? "N/A"}\n`;
+    intelligenceSection += `  Flood: ${intelligence.confidence.flood ?? "N/A"}\n`;
+  }
+
+  // ── Nearby POI data from /nearby endpoint (5 km radius) ──
+  let nearbySection = "";
+  if (nearby) {
+    const nearbyItems = Object.entries(nearby).filter(([, v]) => v.count > 0);
+    if (nearbyItems.length > 0) {
+      nearbySection = "\n── Nearby POIs (5 km radius, from OSM database) ──\n";
+      nearbyItems.forEach(([cat, v]) => {
+        nearbySection += `  ${cat.replace(/_/g, " ")}: ${v.count} found, nearest ${Math.round(v.nearest_distance_meters)} m\n`;
+      });
+    }
+  }
+
+  return `${persona}${prioritySection}
+${locationHeader}
+${intelligenceSection}${nearbySection}
+═══ INSTRUCTIONS ═══
+1. Answer the user's specific question directly and concisely.
+2. Provide relevant data and practical interpretation for someone considering living/working there. (For nearby places, always provide actual distances when available, e.g., "The closest school is approximately 676m away". Return actual names if present).
+3. When discussing electricity, ALWAYS mention both the electricity band and the estimated daily supply hours. Use this mapping:
+   - Band A = 20+ hours/day
+   - Band B = 16–20 hours/day
+   - Band C = 12–16 hours/day
+   - Band D = 8–12 hours/day
+   - Band E = 4–8 hours/day
+   Example: "This area is classified as Band B electricity coverage, which typically corresponds to around 16–20 hours of electricity daily."
+
+Never make up data not shown above. Focus on answering the way a knowledgeable local resident with access to reliable data would answer.`;
+}
+
+// ─── Fallback streaming response ──────────────────────────────────────────────
+
+function makeStream(text: string): ReadableStream {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    async start(controller) {
+      const chunkSize = 6;
+      for (let i = 0; i < text.length; i += chunkSize) {
+        controller.enqueue(encoder.encode(text.slice(i, i + chunkSize)));
+        await new Promise((r) => setTimeout(r, 12));
+      }
+      controller.close();
+    },
+  });
+}
+
+function generateFallbackResponse(
+  location: ResolvedLocation | null,
+  intelligence: LocationIntelligence | null,
+  nearby: NearbyResults | null,
+  priorities: UserPriorities
+): string {
+  if (!location) {
+    return `I am EkoScout, a data-driven local analyst for Lagos living conditions.\n\nPlease type **@** followed by a neighbourhood name to pin a location. I will provide intelligence regarding power supply, environmental features, and nearby amenities based on the available data.`;
+  }
+
+  const label = location.parentArea ? `${location.name}, ${location.parentArea}` : location.name;
+
+  if (!intelligence) {
+    return `Location pinned: **${label}**.\n\nHowever, I could not retrieve intelligence data for this location at this time.`;
+  }
+
+  const env = intelligence.environmental_intelligence;
+  const elec = intelligence.electricity_intelligence;
+  const nearbyAccess = intelligence.nearby_accessibility;
+
+  let response = `Here's what our data says about **${label}**:\n\n`;
+
+  // Electricity
+  if (elec.dominant) {
+    const conf = Number(elec.dominant.confidence_score ?? 0);
+    const confLabel = conf >= 0.8 ? "high" : conf >= 0.5 ? "moderate" : "low";
+    response += `**Power supply** — confidence score: ${elec.dominant.confidence_score} (${confLabel} reliability signal)`;
+    if (elec.dominant.distance_m) {
+      response += `, data point is ${Math.round(Number(elec.dominant.distance_m))} m from your pin`;
+    }
+    response += ".\n\n";
+  } else {
+    response += `**Power supply** — no electricity data for this cell yet.\n\n`;
+  }
+
+  // Environmental
+  if (env) {
+    const fields = Object.entries(env)
+      .filter(([k, v]) => !k.startsWith("h3") && !k.startsWith("centroid") && !k.startsWith("id") && v !== null);
+    if (fields.length > 0) {
+      response += `**Environmental features:**\n`;
+      fields.forEach(([k, v]) => {
+        response += `- ${k.replace(/_/g, " ")}: ${v}\n`;
+      });
+      response += "\n";
+    }
+  }
+
+  // Nearby accessibility
+  const accessItems = Object.entries(nearbyAccess).filter(([, v]) => v.count > 0);
+  if (accessItems.length > 0) {
+    response += `**Nearby within 5 km:**\n`;
+    accessItems.forEach(([cat, v]) => {
+      const dist = v.nearest_distance_meters != null ? ` (nearest: ${Math.round(v.nearest_distance_meters)} m)` : "";
+      response += `- ${cat.replace(/_/g, " ")}: ${v.count}${dist}\n`;
+    });
+    response += "\n";
+  }
+
+  // Nearby POIs from message-specific query
+  if (nearby) {
+    const nearbyItems = Object.entries(nearby).filter(([, v]) => v.count > 0);
+    if (nearbyItems.length > 0) {
+      response += `**Nearby within 5 km (detailed):**\n`;
+      nearbyItems.forEach(([cat, v]) => {
+        response += `- ${cat.replace(/_/g, " ")}: ${v.count} (nearest: ${Math.round(v.nearest_distance_meters)} m)\n`;
+      });
+      response += "\n";
+    }
+  }
+
+  // Priority callouts
+  if (priorities.workFromHome && elec.dominant) {
+    const conf = Number(elec.dominant.confidence_score ?? 0);
+    response += conf < 0.6
+      ? `> Since you work from home, that power score warrants attention. Most remote workers in areas like this invest in a good inverter setup.\n\n`
+      : `> Power confidence looks reasonable for remote work, though backup power is always wise in Lagos.\n\n`;
+  }
+
+  return response.trim();
+}
+
+// ─── Main POST handler ────────────────────────────────────────────────────────
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { message, history = [], priorities } = body as {
+    const { message, history = [], priorities, locations } = body as {
       message: string;
       history: ChatMessage[];
       priorities: UserPriorities;
+      locations?: ResolvedLocation[];
     };
 
-    if (!message) {
+    if (!message?.trim()) {
       return NextResponse.json({ error: "Message is required" }, { status: 400 });
     }
 
-    // 1. Resolve location from message (DB first, Google Maps second)
-    const matchedLoc = await resolveLocation(message);
+    const activeLocation: ResolvedLocation | null =
+      Array.isArray(locations) && locations.length > 0
+        ? locations[locations.length - 1]
+        : null;
 
-    // Get API Keys if available
-    const openAiApiKey = process.env.OPENAI_API_KEY;
-    const isLive = !!openAiApiKey;
+    const openai = getOpenAI();
 
-    // Construct metadata headers
     const headers = new Headers({
       "Content-Type": "text/plain; charset=utf-8",
-      "X-EkoScout-Mode": isLive ? "live" : "mock",
+      "X-EkoScout-Mode": openai ? "live" : "mock",
     });
-
-    if (matchedLoc) {
-      // Safely encode JSON to prevent HTTP header formatting issues
-      headers.set("X-EkoScout-Location", encodeURIComponent(JSON.stringify(matchedLoc)));
+    if (activeLocation) {
+      headers.set("X-EkoScout-Location", encodeURIComponent(JSON.stringify(activeLocation)));
     }
 
-    // 2. If OpenAI key is present, use OpenAI with streaming
-    if (isLive) {
+    // Derive origin for internal API calls
+    const { protocol, host } = new URL(req.url);
+    const origin = `${protocol}//${host}`;
+
+    // ── Fetch intelligence + nearby in parallel, server-side ──
+    // Always fetch both when a location is pinned — the nearby data is
+    // lightweight and essential context for any location question.
+    const locLat = activeLocation?.lat;
+    const locLng = activeLocation?.lng;
+    const hasLocation = locLat != null && locLng != null;
+    const [intelligence, nearby] = await Promise.all([
+      hasLocation
+        ? fetchIntelligence(locLat, locLng, origin)
+        : Promise.resolve(null),
+      hasLocation
+        ? fetchNearby(locLat, locLng, origin)
+        : Promise.resolve(null),
+    ]);
+
+    // Debug: log what data we're injecting into the prompt
+    if (hasLocation) {
+      console.log(`[EkoScout] Location: ${activeLocation?.name ?? 'unnamed'} (${locLat}, ${locLng})`);
+      console.log(`[EkoScout] Intelligence: ${intelligence ? 'loaded' : 'null'}`);
+      console.log(`[EkoScout] Nearby categories: ${nearby ? Object.keys(nearby).join(', ') : 'null'}`);
+    }
+
+    const systemPrompt = buildSystemPrompt(priorities, activeLocation, intelligence, nearby);
+
+    // ── Live OpenAI path ──
+    if (openai) {
       try {
-        const openai = new OpenAI({ apiKey: openAiApiKey });
-        const systemPrompt = constructSystemPrompt(priorities, matchedLoc);
-        
-        const apiMessages = [
-          { role: "system" as const, content: systemPrompt },
-          ...history.map(h => ({ role: h.role as "user" | "assistant" | "system", content: h.content })),
-          { role: "user" as const, content: message }
+        const apiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+          { role: "system", content: systemPrompt },
+          ...history.slice(-20).map((h) => ({
+            role: h.role as "user" | "assistant",
+            content: h.content,
+          })),
+          { role: "user", content: message },
         ];
 
         const responseStream = await openai.chat.completions.create({
           model: "gpt-4o",
           messages: apiMessages,
-          temperature: 0.7,
-          max_tokens: 800,
+          temperature: 0.75,
+          max_tokens: 1000,
           stream: true,
         });
 
-        // Create a ReadableStream from the OpenAI stream
         const encoder = new TextEncoder();
         const stream = new ReadableStream({
           async start(controller) {
             for await (const chunk of responseStream) {
-              const text = chunk.choices[0]?.delta?.content || "";
-              if (text) {
-                controller.enqueue(encoder.encode(text));
-              }
+              const delta = chunk.choices[0]?.delta?.content;
+              if (delta) controller.enqueue(encoder.encode(delta));
             }
             controller.close();
+          },
+          async cancel() {
+            await responseStream.controller.abort();
           },
         });
 
         return new Response(stream, { headers });
-      } catch (err) {
-        console.error("OpenAI API call failed, falling back to mock intelligence:", err);
+      } catch (err: any) {
+        console.error("OpenAI error:", err?.message ?? err);
+        // fall through to fallback
       }
     }
 
-    // 3. Fallback/Mock Mode: Generate mock intelligence response and stream it to user
-    const responseText = generateMockIntelligenceResponse(message, priorities, matchedLoc);
-    const encoder = new TextEncoder();
-    const stream = new ReadableStream({
-      async start(controller) {
-        // Stream text word-by-word with small delay to simulate typing
-        const words = responseText.split(" ");
-        for (let i = 0; i < words.length; i++) {
-          controller.enqueue(encoder.encode(words[i] + (i === words.length - 1 ? "" : " ")));
-          // Yield to main thread & simulate latency (around 30ms per word)
-          await new Promise(resolve => setTimeout(resolve, 25));
-        }
-        controller.close();
-      },
-    });
-
-    return new Response(stream, { headers });
-
+    // ── Fallback (no key or OpenAI error) ──
+    const fallback = generateFallbackResponse(activeLocation, intelligence, nearby, priorities);
+    return new Response(makeStream(fallback), { headers });
   } catch (error: any) {
-    console.error("Error in chat API route:", error);
+    console.error("Chat route error:", error);
     return NextResponse.json({ error: error.message || "Internal server error" }, { status: 500 });
   }
-}
-
-function constructSystemPrompt(priorities: UserPriorities, location: ResolvedLocation | null): string {
-  const isGoogle = location?.isGooglePlace;
-
-  return `You are "EkoScout", a highly practical, conversational, and grounded AI living-condition assistant for Lagos, Nigeria.
-Your job is to help users understand what living in a specific street, junction, landmark, or neighborhood in Lagos is ACTUALLY like before they visit it.
-
-PRIMARY INSTRUCTIONS:
-1. Tone: Practical, realistic, empathetic, conversational, and transparent about street-level uncertainty.
-2. Vocabulary: Use authentic Nigerian context terms where appropriate (e.g., "Band A grid power", "danfo", "korope", "area boys", "estimated billing", "inverter load", "up-Island", "mainland").
-3. Nuance: Do NOT sound overly confident. Use phrases like:
-   - "Internet quality varies street by street here."
-   - "Reports around this area are mixed."
-   - "Flooding tends to worsen during heavy rainfall."
-   - "Traffic becomes significantly worse during weekday evenings."
-4. Customization: The user has set the following priorities. You must tailor your response to highlight how the location fares against these:
-   - Work From Home / Remote Work: ${priorities.workFromHome ? "CRITICAL (Needs stable internet & power)" : "Neutral"}
-   - Flood Sensitivity: ${priorities.floodSensitive ? "CRITICAL (Flooding is a dealbreaker)" : "Neutral"}
-   - Commute Stress: ${priorities.commuteStress ? "CRITICAL (Hates traffic, needs good transit access)" : "Neutral"}
-   - Noise Sensitivity: ${priorities.noiseSensitive ? "CRITICAL (Needs quiet, family-friendly area)" : "Neutral"}
-   - Power Reliability: ${priorities.powerReliability ? "CRITICAL (Needs constant or highly stable power)" : "Neutral"}
-
-LOCATION CONTEXT:
-${location ? `We resolved location information for: "${location.name}".
-- Parent Area: ${location.parentArea}
-${location.formattedAddress ? `- Resolved Address via Google Maps: ${location.formattedAddress}` : ""}
-${location.lat && location.lng ? `- Coordinates: Latitude ${location.lat}, Longitude ${location.lng}` : ""}
-${isGoogle ? `
-NOTE: This location was resolved dynamically via Google Maps but EkoScout has no verified surveyor audits for it yet. 
-You must explicitly mention that this is an unverified area. Tell the user what you know generally about the parent area (${location.parentArea}) and offer general advice based on their priorities. Be open about the lack of specific street-level survey data.
-` : `
-Use this verified hyperlocal survey data as your ground truth:
-- Ratings (out of 5, where 5 is best/most favorable):
-  * Internet: ${location.scores.internet}/5 (Details: ${location.details.internet.status}. Breakdown: ${location.details.internet.breakdown}. Recommended ISPs: ${location.details.internet.recommendedISPs.join(", ")})
-  * Power: ${location.scores.power}/5 (Details: ${location.details.power.status}. Breakdown: ${location.details.power.breakdown}. Backup: ${location.details.power.backupOptions}. Billing: ${location.details.power.billing})
-  * Drainage/Flooding: ${location.scores.flooding}/5 (Higher is better/less flood risk. Details: ${location.details.flooding.status}. Breakdown: ${location.details.flooding.breakdown}. Seasonality: ${location.details.flooding.seasonality})
-  * Traffic/Commute: ${location.scores.traffic}/5 (Higher is better/less traffic. Details: ${location.details.traffic.status}. Breakdown: ${location.details.traffic.breakdown}. Peak Hours: ${location.details.traffic.peakHours}. Transit: ${location.details.traffic.transitAccess})
-  * Quietness: ${location.scores.noise}/5 (Higher is better/quieter. Details: ${location.details.noise.status}. Breakdown: ${location.details.noise.breakdown}. Sources: ${location.details.noise.sources.join(", ")})
-  * Safety: ${location.scores.safety}/5 (Details: ${location.details.safety.status}. Breakdown: ${location.details.safety.breakdown}. Security Type: ${location.details.safety.securityType})
-  * Vibe: ${location.details.lifestyle.vibe}
-  * Remote Work suitability: ${location.details.lifestyle.remoteWork}
-  * Walkability: ${location.details.lifestyle.walkability}
-  * Advice: ${location.details.lifestyle.generalAdvice}
-`}
-` : "No specific match was found in our database or Google Maps for this exact location. Answer based on general knowledge of the area, but explicitly state your uncertainty. Remind the user that Lagos is extremely micro-local and conditions can change from one street to the next."}
-
-Remember, you are an advisor, not a sales agent. Be extremely honest. If an area floods or is noisy, say so plainly. Provide practical tips (e.g. tell them to inspect the walls for dampness, or visit the area at 10 PM on a Friday).`;
-}
-
-// Local mock intelligence response generator when OpenAI is not configured
-function generateMockIntelligenceResponse(
-  message: string,
-  priorities: UserPriorities,
-  location: ResolvedLocation | null
-): string {
-  if (!location) {
-    return `I couldn't match the exact street or landmark you mentioned to our database or Google Maps. In Lagos, living conditions are extremely micro-local; one street can have 24/7 power while the very next street is in darkness for days.
-    
-Could you try asking about a specific street (e.g., *Admiralty Way*, *Chevron Drive*, *Sabo Yaba*, *Adeniran Ogunsanya*, or *Ikeja GRA*)?
-
-*Tip: You can ask things like "Does Chevron Drive flood?" or "Is Sabo Yaba good for remote work?"*`;
-  }
-
-  const { name, scores, details } = location;
-  const isGoogle = location.isGooglePlace;
-
-  let text = `Here is a practical lifestyle audit for **${name}** based on local reports.\n\n`;
-
-  if (isGoogle) {
-    text += `⚠️ **Unverified Location:** We resolved this location via Google Maps at *${location.formattedAddress}*, but we do not have verified street-level survey data for it yet.\n\n`;
-    text += `### General Area Vibe (${location.parentArea})\nThis area is general Mainland or Island territory. Conditions vary street-by-street. Be sure to check the neighborhood profile during high tide or heavy rains.\n\n`;
-    
-    // Advice based on priorities
-    const adviceList = [];
-    if (priorities.workFromHome) adviceList.push("- **Remote Work:** Verify ISP fiber routing directly. Do not assume estate generators provide constant power.");
-    if (priorities.floodSensitive) adviceList.push("- **Flooding:** Check gutters. If they are filled with stagnant dark silt, the road is highly likely to pool during downpours.");
-    if (priorities.commuteStress) adviceList.push("- **Traffic:** Commuting routes depend heavily on exits to the major expressways.");
-    if (priorities.noiseSensitive) adviceList.push("- **Quietness:** Inner residential closes are usually tranquil, but properties close to commercial streets are heavily subject to shop generator noise.");
-    if (priorities.powerReliability) adviceList.push("- **Power Profile:** Ask if the building is on a Band A grid line, or check generator run-schedules (many estates turn them off at 9 AM).");
-    
-    if (adviceList.length > 0) {
-      text += `### Recommendations for your Filters:\n${adviceList.join("\n")}\n\n`;
-    }
-    
-    text += `### EkoScout Inspection Advice\n💡 Visit the street at 8 PM on a weekday to audit noise, and inspect concrete walls for tide lines or rising damp before renting.`;
-    return text;
-  }
-
-  // 1. Vibe & Overview
-  text += `### The Vibe\n${details.lifestyle.vibe} Generally, safety is rated at **${scores.safety}/5** (${details.safety.status}).\n\n`;
-
-  // 2. Tailoring to user priorities
-  const priorityComments: string[] = [];
-
-  if (priorities.workFromHome) {
-    if (scores.internet >= 4 && scores.power >= 4) {
-      priorityComments.push(`Since you **work remotely**, this is a highly viable location. The internet is rated **${scores.internet}/5** (${details.internet.status}) and power is **${scores.power}/5** (${details.power.status}). ${details.lifestyle.remoteWork}`);
-    } else {
-      priorityComments.push(`As a **remote worker**, please note: while the internet is rated **${scores.internet}/5**, grid power sits at **${scores.power}/5** (${details.power.status}). You will definitely need a robust backup (inverter or solar) to survive here without constant interruption.`);
-    }
-  }
-
-  if (priorities.floodSensitive) {
-    if (scores.flooding <= 2) {
-      priorityComments.push(`⚠️ **Flooding is a major concern here.** We rate this area's flood resistance at just **${scores.flooding}/5** (${details.flooding.status}). During heavy rainfall from June to September, adjacent streets become waterlogged. ${details.flooding.breakdown}`);
-    } else if (scores.flooding === 3) {
-      priorityComments.push(`🌧️ **Moderate flood risk.** The drainage is rated **${scores.flooding}/5**. Some parts are elevated, but access roads can gather deep puddles during downpours. ${details.flooding.breakdown}`);
-    } else {
-      priorityComments.push(`✅ **Flood resistance is high (${scores.flooding}/5).** ${details.flooding.status}. The terrain is higher, and drainages work well, so water drains quickly.`);
-    }
-  }
-
-  if (priorities.commuteStress) {
-    if (scores.traffic <= 2) {
-      priorityComments.push(`🚗 **Commute stress is high.** Traffic is rated **${scores.traffic}/5** (${details.traffic.status}). During rush hours, expect significant gridlocks. ${details.traffic.breakdown}`);
-    } else {
-      priorityComments.push(`🚦 **Commute is relatively manageable (${scores.traffic}/5).** ${details.traffic.status} It's central enough that ride-hailing is fast and connections to bridges are straightforward.`);
-    }
-  }
-
-  if (priorities.noiseSensitive) {
-    if (scores.noise <= 2) {
-      priorityComments.push(`🤫 **Noise is a problem here.** Quietness is rated **${scores.noise}/5** (${details.noise.status}). Nightlife, clubs, or traffic echo are dominant. ${details.noise.breakdown}`);
-    } else {
-      priorityComments.push(`🤫 **Quiet and peaceful.** Quietness is rated **${scores.noise}/5** (${details.noise.status}). It is mostly residential and sheltered from commercial hum.`);
-    }
-  }
-
-  if (priorities.powerReliability && !priorities.workFromHome) {
-    priorityComments.push(`⚡ **Power Profile:** Rated **${scores.power}/5** (${details.power.status}). ${details.power.breakdown} Billing is via ${details.power.billing}.`);
-  }
-
-  if (priorityComments.length > 0) {
-    text += `### How It Fits Your Needs\n${priorityComments.join("\n\n")}\n\n`;
-  }
-
-  // 3. Infrastructure & Daily Life Breakdown
-  text += `### Infrastructure Breakdown\n`;
-  text += `- **Internet & Connectivity:** ${details.internet.breakdown} *Recommended: ${details.internet.recommendedISPs.join(", ")}*\n`;
-  text += `- **Power & Light:** ${details.power.status}. ${details.power.backupOptions}\n`;
-  text += `- **Traffic & Access:** Peak bottleneck occurs around **${details.traffic.peakHours}**. Public transit access is *${details.traffic.transitAccess}*.\n`;
-  text += `- **Noise Profile:** ${details.noise.breakdown} Major sources: *${details.noise.sources.join(", ")}*.\n\n`;
-
-  // 4. Actionable Advice
-  text += `### EkoScout Inspection Advice\n`;
-  text += `💡 *${details.lifestyle.generalAdvice}* Also verify if there are any pending estate dues, and check if the apartment has a dedicated water filtration system, as water quality can vary significantly.`;
-
-  return text;
 }

@@ -118,8 +118,8 @@ async function fetchElectricityIntelligence(lat: number, lng: number): Promise<E
     LIMIT 2;
   `;
   const rows = await safeQuery<ElectricityRow>(distanceSql, [lat, lng, ...nearbyCells]);
-  const dominant = rows[0] ?? null;
-  const secondary = rows[1] && rows[1].distance_m && rows[1].distance_m <= 5000 ? rows[1] : null;
+  const dominant = rows?.[0] ?? null;
+  const secondary = rows?.[1] && rows[1].distance_m && rows[1].distance_m <= 5000 ? rows[1] : null;
   return { dominant, secondary };
 }
 
@@ -142,8 +142,8 @@ export async function GET(req: Request) {
   // Electricity intelligence – limited to nearby H3 cells.
   const electricity = await fetchElectricityIntelligence(lat, lng);
 
-  // Flood intelligence – exact match.
-  const flood = await fetchRow<any>("flood", h3_r9);
+  // Flood intelligence – exact match (disabled until flood table is seeded).
+  // const flood = await fetchRow<any>("flood", h3_r9);
 
   // Nearby accessibility – aggregated per category.
   const nearby = await fetchNearbyAccessibility(lat, lng, radius);
@@ -158,7 +158,7 @@ export async function GET(req: Request) {
     confidence: {
       environmental: env.row?.confidence_score ?? null,
       electricity: electricity.dominant?.confidence_score ?? null,
-      flood: flood?.confidence_score ?? null
+      flood: null // flood?.confidence_score ?? null
     }
   };
 

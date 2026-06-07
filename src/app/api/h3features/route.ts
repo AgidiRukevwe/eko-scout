@@ -114,7 +114,7 @@ export async function GET(req: Request) {
       targetLat = coords.lat;
       targetLng = coords.lng;
       
-      const { h3_r9 } = enrich_with_h3(targetLat, targetLng);
+      const { h3_r9 } = enrich_with_h3(coords.lat, coords.lng);
       h3Param = h3_r9;
     }
 

@@ -1,22 +1,14 @@
-import type { Metadata } from "next";
-import "./globals.css";
+import './globals.css';
 
-export const metadata: Metadata = {
-  title: "EkoScout | Lagos Hyperlocal Living-Condition Assistant",
-  description: "Ask what living anywhere in Lagos is actually like. Get practical insights about internet reliability, flooding, traffic, power, and noise before house hunting.",
+export const metadata = {
+  title: 'EkoScout',
+  description: 'Clean slate for EkoScout UI',
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html
-      lang="en"
-      className="h-full antialiased"
-    >
-      <body className="min-h-full flex flex-col">{children}</body>
+    <html lang="en" className="h-full">
+      <body className="h-full bg-zinc-950 text-zinc-50 antialiased">{children}</body>
     </html>
   );
 }

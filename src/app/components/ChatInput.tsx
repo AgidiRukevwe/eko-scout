@@ -13,9 +13,6 @@ type Props = {
 // Unique marker so we can find chips in DOM
 const CHIP_ATTR = "data-location-chip";
 
-/**
- * Get text content before cursor in a contentEditable element.
- */
 function getTextBeforeCursor(el: HTMLElement): string {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0) return "";
@@ -25,9 +22,6 @@ function getTextBeforeCursor(el: HTMLElement): string {
   return range.toString();
 }
 
-/**
- * Select and delete the @query token immediately before the cursor.
- */
 function deleteAtToken(el: HTMLElement) {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0) return;
@@ -52,9 +46,6 @@ function deleteAtToken(el: HTMLElement) {
   }
 }
 
-/**
- * Build the chip HTML string to inject.
- */
 function buildChipHTML(loc: Location): string {
   return `<span
     ${CHIP_ATTR}="true"
@@ -68,9 +59,6 @@ function buildChipHTML(loc: Location): string {
   ><span class="location-chip-icon"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 21C16 16.8 19 12.8637 19 9.5C19 5.35786 15.866 2 12 2C8.13401 2 5 5.35786 5 9.5C5 12.8637 8 16.8 12 21Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="9" r="2.5" stroke="currentColor" stroke-width="2"/></svg></span>${loc.name}</span>`;
 }
 
-/**
- * Read all text + chips from the editor div.
- */
 function readEditorContent(el: HTMLElement): { text: string; locations: Location[] } {
   const locations: Location[] = [];
   let text = "";
@@ -103,18 +91,26 @@ const ChatInput: React.FC<Props> = ({ onSend, isSending, onLocationSelect }) => 
   const [showDropdown, setShowDropdown] = useState(false);
   const [locationQuery, setLocationQuery] = useState("");
   const [isEmpty, setIsEmpty] = useState(true);
+  
   const editorRef = useRef<HTMLDivElement>(null);
+  
+  // Stable reference for dangerouslySetInnerHTML so React NEVER updates it
+  const initialHtml = useRef({ __html: "" });
 
-  // Track @-trigger on every input
+  // Update contentEditable attribute manually to avoid JSX re-renders wiping DOM
+  useEffect(() => {
+    if (editorRef.current) {
+      editorRef.current.contentEditable = isSending ? "false" : "true";
+    }
+  }, [isSending]);
+
   const handleInput = useCallback(() => {
     const el = editorRef.current;
     if (!el) return;
 
-    // Update empty state
     const { text } = readEditorContent(el);
     setIsEmpty(text.trim() === "");
 
-    // Detect @query before cursor
     const before = getTextBeforeCursor(el);
     const match = before.match(/@([a-zA-Z0-9\s,-]{0,40})$/);
     if (match) {
@@ -136,7 +132,6 @@ const ChatInput: React.FC<Props> = ({ onSend, isSending, onLocationSelect }) => 
     }
   };
 
-  // Insert chip at cursor, replacing @query token
   const handleSelectLocation = (loc: Location) => {
     const el = editorRef.current;
     if (!el) return;
@@ -146,15 +141,11 @@ const ChatInput: React.FC<Props> = ({ onSend, isSending, onLocationSelect }) => 
     onLocationSelect?.(loc);
 
     el.focus();
-
-    // 1. Delete the @query token
     deleteAtToken(el);
 
-    // 2. Insert chip HTML + trailing non-breaking space
     const chipHTML = buildChipHTML(loc) + "&nbsp;";
     document.execCommand("insertHTML", false, chipHTML);
 
-    // 3. Update empty state
     const { text } = readEditorContent(el);
     setIsEmpty(text.trim() === "");
   };
@@ -168,13 +159,11 @@ const ChatInput: React.FC<Props> = ({ onSend, isSending, onLocationSelect }) => 
 
     onSend(text.trim(), locations);
 
-    // Clear editor
     el.innerHTML = "";
     setIsEmpty(true);
     setShowDropdown(false);
   };
 
-  // Trigger @ dropdown via the pin button
   const handlePinClick = (e: React.MouseEvent) => {
     e.preventDefault();
     const el = editorRef.current;
@@ -186,7 +175,6 @@ const ChatInput: React.FC<Props> = ({ onSend, isSending, onLocationSelect }) => 
 
   return (
     <div className="relative max-w-2xl mx-auto w-full">
-      {/* @ location dropdown */}
       {showDropdown && (
         <div className="absolute bottom-full mb-3 left-0 w-80 bg-white border border-zinc-100 rounded-2xl shadow-xl z-20 overflow-hidden">
           <LocationDropdown query={locationQuery} onSelect={handleSelectLocation} />
@@ -194,13 +182,11 @@ const ChatInput: React.FC<Props> = ({ onSend, isSending, onLocationSelect }) => 
       )}
 
       <div className="bg-zinc-50 border border-zinc-100/80 rounded-3xl p-3 shadow-sm">
-        {/* Rich text editor */}
         <div className="px-3 pb-2 relative">
           <div
             ref={editorRef}
-            contentEditable={!isSending}
             suppressContentEditableWarning
-            dangerouslySetInnerHTML={{ __html: "" }}
+            dangerouslySetInnerHTML={initialHtml.current}
             onInput={handleInput}
             onKeyDown={handleKeyDown}
             className="chat-editor w-full min-h-[28px] max-h-40 overflow-y-auto text-zinc-800 focus:outline-none text-[0.95rem] py-1 leading-relaxed"
@@ -216,7 +202,6 @@ const ChatInput: React.FC<Props> = ({ onSend, isSending, onLocationSelect }) => 
         </div>
 
         <div className="flex items-center justify-between px-2 pt-1">
-          {/* Pin location button */}
           <button
             type="button"
             onMouseDown={handlePinClick}
@@ -226,7 +211,6 @@ const ChatInput: React.FC<Props> = ({ onSend, isSending, onLocationSelect }) => 
             <LocationIcon size={20} />
           </button>
 
-          {/* Send */}
           <button
             onClick={handleSend}
             disabled={isEmpty || isSending}

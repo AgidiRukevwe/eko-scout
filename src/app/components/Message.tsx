@@ -1,6 +1,7 @@
 "use client";
 import React, { useMemo, useState, useEffect } from "react";
 import { marked } from "marked";
+import { Like1, Dislike, Refresh2, Copy, TickCircle, Edit2 } from "iconsax-react";
 
 interface MessageProps {
   role: "user" | "assistant";
@@ -83,9 +84,7 @@ export default function Message({ role, content, isStreaming, onEdit }: MessageP
                     className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-zinc-700 transition-all p-1 -mr-2 -mt-1 rounded hover:bg-zinc-200"
                     title="Edit message"
                   >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <path d="M11 4H4C2.89543 4 2 4.89543 2 6V20C2 21.1046 2.89543 22 4 22H18C19.1046 22 20 21.1046 20 20V13M18.5 2.5C19.8807 1.11929 22.1193 1.11929 23.5 2.5C24.8807 3.88071 24.8807 6.11929 23.5 7.5L12 19L7 20L8 15L18.5 2.5Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
+                    <Edit2 size={15} variant="Linear" />
                   </button>
                 )}
               </div>
@@ -122,19 +121,13 @@ export default function Message({ role, content, isStreaming, onEdit }: MessageP
           <div className="flex items-center gap-2 mt-3 ml-2">
             <div className="flex items-center bg-zinc-50 rounded-full border border-zinc-100 p-1">
               <button className="p-1.5 text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 rounded-full transition-colors" title="Helpful">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M14 9V5C14 3.89543 13.1046 3 12 3H10C9.73478 3 9.48043 3.10536 9.29289 3.29289L3.29289 9.29289C3.10536 9.48043 3 9.73478 3 10V20C3 21.1046 3.89543 22 5 22H16.28C17.2215 22 18.0315 21.35 18.23 20.424L19.73 13.424C19.9827 12.2446 19.0831 11.135 17.88 11.135H14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
+                <Like1 size={18} variant="Linear" />
               </button>
               <button className="p-1.5 text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 rounded-full transition-colors" title="Not helpful">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M10 15V19C10 20.1046 10.8954 21 12 21H14C14.2652 21 14.5196 20.8946 14.7071 20.7071L20.7071 14.7071C20.8946 14.5196 21 14.2652 21 14V4C21 2.89543 20.1046 2 19 2H7.72C6.77848 2 5.96848 2.65005 5.77 3.57597L4.27 10.576C4.01734 11.7554 4.91694 12.865 6.12 12.865H10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
+                <Dislike size={18} variant="Linear" />
               </button>
               <button className="p-1.5 text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 rounded-full transition-colors" title="Regenerate">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M4 12C4 16.4183 7.58172 20 12 20C16.4183 20 20 16.4183 20 12C20 7.58172 16.4183 4 12 4M12 4L8 8M12 4L16 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
+                <Refresh2 size={18} variant="Linear" />
               </button>
             </div>
             <button
@@ -147,14 +140,9 @@ export default function Message({ role, content, isStreaming, onEdit }: MessageP
               title={copied ? "Copied!" : "Copy text"}
             >
               {copied ? (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M20 6L9 17L4 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
+                <TickCircle size={16} variant="Bold" />
               ) : (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                  <path d="M5 15H4C2.89543 15 2 14.1046 2 13V4C2 2.89543 2.89543 2 4 2H13C14.1046 2 15 2.89543 15 4V5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
+                <Copy size={16} variant="Linear" />
               )}
             </button>
           </div>

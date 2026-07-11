@@ -1,5 +1,6 @@
 "use client";
 import React, { useEffect, useRef, useState } from "react";
+import { Location as LocationIcon, Gps } from "iconsax-react";
 
 export interface Location {
   id: string;
@@ -116,10 +117,7 @@ export default function LocationDropdown({ query, onSelect }: Props) {
               className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-blue-50 transition-colors border-b border-zinc-100"
             >
               <div className="flex shrink-0 items-center justify-center text-blue-600 bg-blue-100/50 p-1.5 rounded-full">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M12 21a9 9 0 100-18 9 9 0 000 18zM12 16a4 4 0 100-8 4 4 0 000 8z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                  <path d="M12 3v2M12 19v2M3 12h2M19 12h2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
+                <Gps size={14} variant="Linear" />
               </div>
               <span className="text-[0.95rem] font-medium text-blue-700">Use Current Location</span>
             </button>
@@ -137,10 +135,7 @@ export default function LocationDropdown({ query, onSelect }: Props) {
                 className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-zinc-50 transition-colors"
               >
                 <div className="flex shrink-0 items-center justify-center text-blue-500">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M12 21C16 16.8 19 12.8637 19 9.5C19 5.35786 15.866 2 12 2C8.13401 2 5 5.35786 5 9.5C5 12.8637 8 16.8 12 21Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                    <circle cx="12" cy="9" r="2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
+                  <LocationIcon size={16} variant="Linear" />
                 </div>
                 <span>
                   <span className="block text-[0.95rem] text-zinc-700">{loc.name}</span>

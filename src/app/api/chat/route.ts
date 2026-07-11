@@ -24,7 +24,7 @@ interface LocationIntelligence {
   electricity_intelligence: {
     dominant: Record<string, any> | null;
     secondary: Record<string, any> | null;
-    nearest_bands?: Record<string, { distance_m: number; lat: number; lng: number } | null>;
+    nearest_bands?: Record<string, { distance_m: number; lat: number; lng: number; name: string | null } | null>;
   };
   nearby_accessibility: Record<string, { count: number; nearest_distance_meters: number | null }>;
   confidence: { environmental: number | null; electricity: number | null; flood: number | null };

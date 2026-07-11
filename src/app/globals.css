@@ -1,5 +1,73 @@
 @import "tailwindcss";
 
+/* ── Font utilities ────────────────────────────────────────────────────────── */
+.font-newsreader {
+  font-family: var(--font-newsreader), Georgia, serif;
+}
+
+/* ── contentEditable chat editor ───────────────────────────────────────────── */
+.chat-editor {
+  caret-color: #3f3f46; /* zinc-700 */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chat-editor:focus {
+  outline: none;
+}
+/* Ensure br nodes don't cause layout jumps */
+.chat-editor br:only-child {
+  display: none;
+}
+
+/* ── Inline location chip ──────────────────────────────────────────────────── */
+.location-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #eff6ff;         /* blue-50 */
+  color: #1d4ed8;              /* blue-700 */
+  border: 1px solid #bfdbfe;   /* blue-200 */
+  border-radius: 9999px;
+  padding: 1px 8px 1px 6px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  line-height: 1.6;
+  vertical-align: middle;
+  user-select: none;
+  white-space: nowrap;
+  margin: 0 2px;
+}
+
+.location-chip-icon {
+  display: inline-flex;
+  align-items: center;
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+.location-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  font-size: 12px;
+  line-height: 1;
+  color: #60a5fa;        /* blue-400 */
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  margin-left: 2px;
+  transition: color 0.15s, background 0.15s;
+}
+.location-chip-remove:hover {
+  color: #1d4ed8;
+  background: #dbeafe; /* blue-100 */
+}
+
+
 /* ── Markdown message styles ─────────────────────────────────────────────── */
 /* Applied to AI assistant responses rendered via marked */
 

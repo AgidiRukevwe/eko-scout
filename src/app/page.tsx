@@ -3,6 +3,7 @@ import React, { useState, useCallback, useRef, useEffect } from "react";
 import { ChatWindow, ChatMessage } from "./components/ChatWindow";
 import ChatInput from "./components/ChatInput";
 import type { Location } from "./components/LocationDropdown";
+import { AddCircle } from "iconsax-react";
 
 // Default user priorities — wire to a settings panel later
 const DEFAULT_PRIORITIES = {
@@ -126,17 +127,14 @@ export default function Home() {
     <main className="flex flex-col h-screen bg-white text-zinc-900">
       {/* Header */}
       <header className="flex items-center justify-between px-6 py-4 max-w-4xl mx-auto w-full">
-        <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-cyan-400 to-blue-500 shadow-sm" />
-          <h1 className="text-xl font-bold tracking-tight text-zinc-800">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-cyan-400 to-blue-500 shadow-sm" />
+          <h1 className="font-newsreader text-xl font-semibold italic tracking-tight text-zinc-800">
             Adera
           </h1>
         </div>
-        <button className="p-1 -mr-1 text-zinc-700 hover:bg-zinc-100 rounded-lg transition-colors">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect x="3" y="3" width="18" height="18" rx="4" stroke="currentColor" strokeWidth="1.5"/>
-            <path d="M12 8V16M8 12H16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-          </svg>
+        <button className="p-1.5 -mr-1 text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 rounded-xl transition-colors">
+          <AddCircle size={22} variant="Linear" />
         </button>
       </header>
 

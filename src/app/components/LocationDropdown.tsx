@@ -22,10 +22,10 @@ export default function LocationDropdown({ query, onSelect }: Props) {
   useEffect(() => {
     const q = query.trim();
 
-    // Hide dropdown when query is empty
-    if (!q) {
+    // Hide dropdown when query is empty (but we now allow empty query to show "Current Location")
+    if (!q && results.length === 0 && !loading) {
+      // Just clear search results, but the component will still render the Current Location button
       setResults([]);
-      setLoading(false);
       return;
     }
 
@@ -67,25 +67,65 @@ export default function LocationDropdown({ query, onSelect }: Props) {
     return () => clearTimeout(timer);
   }, [query]);
 
-  if (!loading && results.length === 0) return null;
+  // Render the dropdown if we are loading, have results, or if the query is empty/"current" to show the GPS button
+  const showCurrentLocation = query.trim().length === 0 || query.toLowerCase().startsWith("c");
+  if (!loading && results.length === 0 && !showCurrentLocation) return null;
+
+  const handleCurrentLocationClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      alert("Geolocation is not supported by your browser");
+      return;
+    }
+    setLoading(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLoading(false);
+        onSelect({
+          id: "current-location",
+          name: "My Location",
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+        });
+      },
+      (err) => {
+        setLoading(false);
+        alert("Unable to retrieve your location. Please check browser permissions.");
+        console.error(err);
+      }
+    );
+  };
 
   return (
-    <div className="absolute bottom-full left-0 right-0 mb-1 bg-zinc-800 border border-zinc-700 rounded-xl shadow-2xl overflow-hidden z-50">
-      <p className="px-3 py-1.5 text-xs font-semibold text-zinc-400 uppercase tracking-wide border-b border-zinc-700">
-        {loading ? "Searching…" : "Search Results"}
-      </p>
-
-      {loading ? (
+    <div className="w-full flex flex-col">
+      {loading && (
         <div className="flex items-center gap-2 px-3 py-3 text-zinc-500 text-sm">
-          <svg className="animate-spin h-4 w-4 text-indigo-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+          <svg className="animate-spin h-4 w-4 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
           </svg>
           Looking up locations…
         </div>
-      ) : (
-        <ul>
-          {results.map((loc) => (
+      )}
+      <ul className="flex flex-col">
+        {showCurrentLocation && (
+          <li>
+            <button
+              type="button"
+              onMouseDown={handleCurrentLocationClick}
+              className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-blue-50 transition-colors border-b border-zinc-100"
+            >
+              <div className="flex shrink-0 items-center justify-center text-blue-600 bg-blue-100/50 p-1.5 rounded-full">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M12 21a9 9 0 100-18 9 9 0 000 18zM12 16a4 4 0 100-8 4 4 0 000 8z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M12 3v2M12 19v2M3 12h2M19 12h2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </div>
+              <span className="text-[0.95rem] font-medium text-blue-700">Use Current Location</span>
+            </button>
+          </li>
+        )}
+        {!loading && results.map((loc) => (
             <li key={loc.id}>
               <button
                 type="button"
@@ -94,22 +134,24 @@ export default function LocationDropdown({ query, onSelect }: Props) {
                   e.preventDefault();
                   onSelect(loc);
                 }}
-                className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-zinc-700 transition-colors"
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-zinc-50 transition-colors"
               >
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-600/20 text-indigo-400 text-xs">
-                  📍
-                </span>
+                <div className="flex shrink-0 items-center justify-center text-blue-500">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 21C16 16.8 19 12.8637 19 9.5C19 5.35786 15.866 2 12 2C8.13401 2 5 5.35786 5 9.5C5 12.8637 8 16.8 12 21Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    <circle cx="12" cy="9" r="2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </div>
                 <span>
-                  <span className="block text-sm font-medium text-zinc-100">{loc.name}</span>
+                  <span className="block text-[0.95rem] text-zinc-700">{loc.name}</span>
                   {loc.parentArea && (
-                    <span className="block text-xs text-zinc-400">{loc.parentArea}</span>
+                    <span className="block text-[0.75rem] text-zinc-400">{loc.parentArea}</span>
                   )}
                 </span>
               </button>
             </li>
           ))}
-        </ul>
-      )}
+      </ul>
     </div>
   );
 }

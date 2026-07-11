@@ -17,6 +17,7 @@ interface ElectricityRow {
 interface ElectricityResult {
   dominant: ElectricityRow | null;
   secondary: ElectricityRow | null;
+  nearest_bands?: Record<string, { distance_m: number, lat: number, lng: number, name: string | null } | null>;
 }
 /** Generic row type for H3 feature tables */
 interface H3FeatureRow {
@@ -96,6 +97,38 @@ async function fetchNearbyAccessibility(lat: number, lng: number, radius = 5000)
 
 }
 
+async function fetchNearestElectricityBands(lat: number, lng: number) {
+  const bands = ['A', 'B', 'C', 'D', 'E'];
+  const results: Record<string, { distance_m: number, lat: number, lng: number, name: string | null } | null> = {};
+  
+  await Promise.all(bands.map(async (band) => {
+    const sql = `
+      SELECT e.centroid_lat, e.centroid_lng, (6371000 * acos(
+        cos(radians($1)) * cos(radians(e.centroid_lat)) *
+        cos(radians(e.centroid_lng) - radians($2)) +
+        sin(radians($1)) * sin(radians(e.centroid_lat))
+      )) AS distance_m,
+      (SELECT r.name FROM osm_roads r WHERE r.h3_r9 = e.h3_index AND r.name IS NOT NULL LIMIT 1) as area_name
+      FROM electricity_h3_features e
+      WHERE e.dominant_band = $3 AND e.centroid_lat IS NOT NULL
+      ORDER BY distance_m ASC
+      LIMIT 1;
+    `;
+    const rows = await safeQuery<any>(sql, [lat, lng, band]);
+    if (rows && rows.length > 0) {
+      results[band] = {
+        distance_m: Number(rows[0].distance_m),
+        lat: rows[0].centroid_lat,
+        lng: rows[0].centroid_lng,
+        name: rows[0].area_name || null
+      };
+    } else {
+      results[band] = null;
+    }
+  }));
+  return results;
+}
+
 async function fetchElectricityIntelligence(lat: number, lng: number): Promise<ElectricityResult> {
   // Determine the base H3 cell at resolution 9 for the location
   const baseCell = h3.latLngToCell(lat, lng, 9);
@@ -120,7 +153,10 @@ async function fetchElectricityIntelligence(lat: number, lng: number): Promise<E
   const rows = await safeQuery<ElectricityRow>(distanceSql, [lat, lng, ...nearbyCells]);
   const dominant = rows?.[0] ?? null;
   const secondary = rows?.[1] && rows[1].distance_m && rows[1].distance_m <= 5000 ? rows[1] : null;
-  return { dominant, secondary };
+  
+  const nearest_bands = await fetchNearestElectricityBands(lat, lng);
+  
+  return { dominant, secondary, nearest_bands };
 }
 
 export async function GET(req: Request) {

@@ -1,8 +1,8 @@
 "use client";
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useCallback, useEffect } from "react";
 import LocationDropdown from "./LocationDropdown";
 import type { Location } from "./LocationDropdown";
-import { Location as LocationIcon, Send2, Gps, CloseCircle } from "iconsax-react";
+import { Location as LocationIcon, Send2 } from "iconsax-react";
 
 type Props = {
   onSend: (text: string, locations: Location[]) => void;
@@ -10,42 +10,122 @@ type Props = {
   onLocationSelect?: (loc: Location) => void;
 };
 
-// A token is either plain text or an @-location chip
-type TextToken = { type: "text"; value: string };
-type ChipToken = { type: "chip"; location: Location };
-type Token = TextToken | ChipToken;
+// Unique marker so we can find chips in DOM
+const CHIP_ATTR = "data-location-chip";
 
 /**
- * ChatInput — rich input with inline @-location chips.
- *
- * Architecture: We maintain a `tokens` array (text + chip segments) as source of truth.
- * The visible input is a `contentEditable` div that renders them.
- * When the user types, we sync back to tokens.
+ * Get text content before cursor in a contentEditable element.
  */
+function getTextBeforeCursor(el: HTMLElement): string {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return "";
+  const range = sel.getRangeAt(0).cloneRange();
+  range.selectNodeContents(el);
+  range.setEnd(sel.getRangeAt(0).startContainer, sel.getRangeAt(0).startOffset);
+  return range.toString();
+}
+
+/**
+ * Select and delete the @query token immediately before the cursor.
+ */
+function deleteAtToken(el: HTMLElement) {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return;
+
+  const range = sel.getRangeAt(0);
+  const node = range.startContainer;
+  const offset = range.startOffset;
+
+  if (node.nodeType === Node.TEXT_NODE) {
+    const text = node.textContent ?? "";
+    const before = text.slice(0, offset);
+    const match = before.match(/@([a-zA-Z0-9\s,-]{0,40})$/);
+    if (match) {
+      const start = offset - match[0].length;
+      const newRange = document.createRange();
+      newRange.setStart(node, start);
+      newRange.setEnd(node, offset);
+      sel.removeAllRanges();
+      sel.addRange(newRange);
+      document.execCommand("delete", false);
+    }
+  }
+}
+
+/**
+ * Build the chip HTML string to inject.
+ */
+function buildChipHTML(loc: Location): string {
+  return `<span
+    ${CHIP_ATTR}="true"
+    data-chip-id="${loc.id}"
+    data-chip-name="${loc.name}"
+    data-chip-lat="${loc.lat ?? ""}"
+    data-chip-lng="${loc.lng ?? ""}"
+    class="location-chip"
+    contenteditable="false"
+    aria-label="${loc.name}"
+  ><span class="location-chip-icon"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 21C16 16.8 19 12.8637 19 9.5C19 5.35786 15.866 2 12 2C8.13401 2 5 5.35786 5 9.5C5 12.8637 8 16.8 12 21Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="9" r="2.5" stroke="currentColor" stroke-width="2"/></svg></span>${loc.name}</span>`;
+}
+
+/**
+ * Read all text + chips from the editor div.
+ */
+function readEditorContent(el: HTMLElement): { text: string; locations: Location[] } {
+  const locations: Location[] = [];
+  let text = "";
+
+  const walk = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      text += node.textContent ?? "";
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      const elem = node as HTMLElement;
+      if (elem.getAttribute(CHIP_ATTR)) {
+        const name = elem.dataset.chipName ?? "";
+        const lat = elem.dataset.chipLat ? Number(elem.dataset.chipLat) : undefined;
+        const lng = elem.dataset.chipLng ? Number(elem.dataset.chipLng) : undefined;
+        const id = elem.dataset.chipId ?? name;
+        text += name;
+        if (!locations.some((l) => l.id === id)) {
+          locations.push({ id, name, lat, lng });
+        }
+      } else {
+        elem.childNodes.forEach(walk);
+      }
+    }
+  };
+
+  el.childNodes.forEach(walk);
+  return { text, locations };
+}
+
 const ChatInput: React.FC<Props> = ({ onSend, isSending, onLocationSelect }) => {
-  const [tokens, setTokens] = useState<Token[]>([{ type: "text", value: "" }]);
   const [showDropdown, setShowDropdown] = useState(false);
   const [locationQuery, setLocationQuery] = useState("");
+  const [isEmpty, setIsEmpty] = useState(true);
   const editorRef = useRef<HTMLDivElement>(null);
-  const dropdownOpen = useRef(false);
 
-  // Keep dropdownOpen ref in sync
-  useEffect(() => {
-    dropdownOpen.current = showDropdown;
-  }, [showDropdown]);
+  // Track @-trigger on every input
+  const handleInput = useCallback(() => {
+    const el = editorRef.current;
+    if (!el) return;
 
-  // Derive plain text (chips rendered as their name)
-  const plainText = tokens
-    .map((t) => (t.type === "chip" ? t.location.name : t.value))
-    .join("");
+    // Update empty state
+    const { text } = readEditorContent(el);
+    setIsEmpty(text.trim() === "");
 
-  const selectedLocations = tokens
-    .filter((t): t is ChipToken => t.type === "chip")
-    .map((t) => t.location);
+    // Detect @query before cursor
+    const before = getTextBeforeCursor(el);
+    const match = before.match(/@([a-zA-Z0-9\s,-]{0,40})$/);
+    if (match) {
+      setLocationQuery(match[1].trim());
+      setShowDropdown(true);
+    } else {
+      setShowDropdown(false);
+      setLocationQuery("");
+    }
+  }, []);
 
-  const isEmpty = plainText.trim() === "";
-
-  // ── Handle keydown ──────────────────────────────────────────────────────────
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -56,52 +136,7 @@ const ChatInput: React.FC<Props> = ({ onSend, isSending, onLocationSelect }) => 
     }
   };
 
-  // ── Handle input — parse tokens from DOM ────────────────────────────────────
-  const handleInput = useCallback(() => {
-    const el = editorRef.current;
-    if (!el) return;
-
-    // Walk the DOM, collecting text and chip nodes
-    const newTokens: Token[] = [];
-    el.childNodes.forEach((node) => {
-      if (node.nodeType === Node.TEXT_NODE) {
-        newTokens.push({ type: "text", value: node.textContent ?? "" });
-      } else if (node.nodeType === Node.ELEMENT_NODE) {
-        const el = node as HTMLElement;
-        if (el.dataset.chipId) {
-          // It's a chip — find the location from selectedLocations
-          const loc = selectedLocations.find((l) => l.id === el.dataset.chipId);
-          if (loc) {
-            newTokens.push({ type: "chip", location: loc });
-            return;
-          }
-        }
-        // Fall back: treat any other element's text as plain text
-        newTokens.push({ type: "text", value: el.textContent ?? "" });
-      }
-    });
-
-    if (newTokens.length === 0) {
-      newTokens.push({ type: "text", value: "" });
-    }
-
-    setTokens(newTokens);
-
-    // Check for @ trigger in last text token
-    const lastText = newTokens.findLast((t): t is TextToken => t.type === "text");
-    if (lastText) {
-      const match = lastText.value.match(/@([a-zA-Z0-9\s,-]{0,40})$/);
-      if (match) {
-        setLocationQuery(match[1].trim());
-        setShowDropdown(true);
-        return;
-      }
-    }
-    setShowDropdown(false);
-    setLocationQuery("");
-  }, [selectedLocations]);
-
-  // ── Insert chip when user picks a location ──────────────────────────────────
+  // Insert chip at cursor, replacing @query token
   const handleSelectLocation = (loc: Location) => {
     const el = editorRef.current;
     if (!el) return;
@@ -110,116 +145,43 @@ const ChatInput: React.FC<Props> = ({ onSend, isSending, onLocationSelect }) => 
     setLocationQuery("");
     onLocationSelect?.(loc);
 
-    // Build new tokens: replace the trailing @... in last text token with a chip
-    setTokens((prev) => {
-      const next: Token[] = [];
-      let inserted = false;
-      for (let i = prev.length - 1; i >= 0; i--) {
-        const t = prev[i];
-        if (!inserted && t.type === "text") {
-          const cleaned = t.value.replace(/@([a-zA-Z0-9\s,-]{0,40})$/, "");
-          if (cleaned !== t.value || i === prev.length - 1) {
-            next.unshift({ type: "text", value: " " }); // trailing space after chip
-            next.unshift({ type: "chip", location: loc });
-            if (cleaned) next.unshift({ type: "text", value: cleaned });
-            inserted = true;
-            continue;
-          }
-        }
-        next.unshift(t);
-      }
-      if (!inserted) {
-        next.push({ type: "chip", location: loc });
-        next.push({ type: "text", value: " " });
-      }
-      return next;
-    });
+    el.focus();
 
-    // Re-render and move cursor to end after React re-render
-    requestAnimationFrame(() => {
-      if (!editorRef.current) return;
-      syncDOMFromTokens();
-      moveCursorToEnd(editorRef.current);
-    });
+    // 1. Delete the @query token
+    deleteAtToken(el);
+
+    // 2. Insert chip HTML + trailing non-breaking space
+    const chipHTML = buildChipHTML(loc) + "&nbsp;";
+    document.execCommand("insertHTML", false, chipHTML);
+
+    // 3. Update empty state
+    const { text } = readEditorContent(el);
+    setIsEmpty(text.trim() === "");
   };
-
-  // ── Remove a chip ────────────────────────────────────────────────────────────
-  const removeChip = (locId: string) => {
-    setTokens((prev) => prev.filter((t) => !(t.type === "chip" && t.location.id === locId)));
-    requestAnimationFrame(() => syncDOMFromTokens());
-  };
-
-  // ── Sync DOM from tokens (controlled render) ─────────────────────────────────
-  const syncDOMFromTokens = useCallback(() => {
-    const el = editorRef.current;
-    if (!el) return;
-
-    // Save selection
-    const sel = window.getSelection();
-    const hadFocus = document.activeElement === el;
-
-    el.innerHTML = "";
-    tokens.forEach((t) => {
-      if (t.type === "text") {
-        el.appendChild(document.createTextNode(t.value));
-      } else {
-        const chip = document.createElement("span");
-        chip.className = "location-chip";
-        chip.contentEditable = "false";
-        chip.dataset.chipId = t.location.id;
-        chip.setAttribute("aria-label", t.location.name);
-
-        const icon = document.createElement("span");
-        icon.className = "location-chip-icon";
-        icon.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 21C16 16.8 19 12.8637 19 9.5C19 5.35786 15.866 2 12 2C8.13401 2 5 5.35786 5 9.5C5 12.8637 8 16.8 12 21Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><circle cx="12" cy="9" r="2.5" stroke="currentColor" strokeWidth="2"/></svg>`;
-
-        const label = document.createElement("span");
-        label.textContent = t.location.name;
-
-        const remove = document.createElement("button");
-        remove.className = "location-chip-remove";
-        remove.type = "button";
-        remove.innerHTML = "×";
-        remove.addEventListener("mousedown", (e) => {
-          e.preventDefault();
-          removeChip(t.location.id);
-        });
-
-        chip.appendChild(icon);
-        chip.appendChild(label);
-        chip.appendChild(remove);
-        el.appendChild(chip);
-      }
-    });
-
-    if (hadFocus) moveCursorToEnd(el);
-  }, [tokens]);
-
-  // On token change, update DOM
-  useEffect(() => {
-    syncDOMFromTokens();
-  }, [tokens]);
-
-  // ── Helpers ──────────────────────────────────────────────────────────────────
-  function moveCursorToEnd(el: HTMLElement) {
-    const range = document.createRange();
-    const sel = window.getSelection();
-    range.selectNodeContents(el);
-    range.collapse(false);
-    sel?.removeAllRanges();
-    sel?.addRange(range);
-  }
 
   const handleSend = () => {
-    if (isEmpty || isSending) return;
-    onSend(plainText.trim(), selectedLocations);
-    setTokens([{ type: "text", value: "" }]);
-    if (editorRef.current) editorRef.current.innerHTML = "";
+    const el = editorRef.current;
+    if (!el || isSending) return;
+
+    const { text, locations } = readEditorContent(el);
+    if (!text.trim()) return;
+
+    onSend(text.trim(), locations);
+
+    // Clear editor
+    el.innerHTML = "";
+    setIsEmpty(true);
     setShowDropdown(false);
   };
 
-  const handleFocus = () => {
-    // noop — placeholder handled by CSS
+  // Trigger @ dropdown via the pin button
+  const handlePinClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const el = editorRef.current;
+    if (!el) return;
+    el.focus();
+    document.execCommand("insertText", false, "@");
+    handleInput();
   };
 
   return (
@@ -231,8 +193,8 @@ const ChatInput: React.FC<Props> = ({ onSend, isSending, onLocationSelect }) => 
         </div>
       )}
 
-      <div className="bg-zinc-50 border border-zinc-100/80 rounded-3xl p-3 shadow-sm relative">
-        {/* contentEditable rich input */}
+      <div className="bg-zinc-50 border border-zinc-100/80 rounded-3xl p-3 shadow-sm">
+        {/* Rich text editor */}
         <div className="px-3 pb-2 relative">
           <div
             ref={editorRef}
@@ -240,13 +202,11 @@ const ChatInput: React.FC<Props> = ({ onSend, isSending, onLocationSelect }) => 
             suppressContentEditableWarning
             onInput={handleInput}
             onKeyDown={handleKeyDown}
-            onFocus={handleFocus}
             className="chat-editor w-full min-h-[28px] max-h-40 overflow-y-auto text-zinc-800 focus:outline-none text-[0.95rem] py-1 leading-relaxed"
             aria-label="Chat input"
             role="textbox"
             aria-multiline="true"
           />
-          {/* Placeholder */}
           {isEmpty && (
             <span className="pointer-events-none absolute top-1 left-0 text-[0.95rem] text-zinc-400 select-none">
               Ask anything. Type @ to pin a location…
@@ -255,17 +215,10 @@ const ChatInput: React.FC<Props> = ({ onSend, isSending, onLocationSelect }) => 
         </div>
 
         <div className="flex items-center justify-between px-2 pt-1">
-          {/* @ hint button */}
+          {/* Pin location button */}
           <button
             type="button"
-            onMouseDown={(e) => {
-              e.preventDefault();
-              // Insert @ into the editor
-              const el = editorRef.current;
-              if (!el) return;
-              el.focus();
-              document.execCommand("insertText", false, "@");
-            }}
+            onMouseDown={handlePinClick}
             className="text-zinc-400 hover:text-blue-500 hover:bg-blue-50 p-2 rounded-full transition-colors flex items-center justify-center"
             title="Pin a location"
           >
@@ -281,7 +234,7 @@ const ChatInput: React.FC<Props> = ({ onSend, isSending, onLocationSelect }) => 
             {isSending ? (
               <span className="w-1.5 h-1.5 bg-white rounded-full animate-ping" />
             ) : (
-              <Send2 size={18} variant="Bold" className="rotate-45 translate-x-[-1px]" />
+              <Send2 size={18} variant="Bold" className="rotate-45 -translate-x-px" />
             )}
           </button>
         </div>

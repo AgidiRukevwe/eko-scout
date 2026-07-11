@@ -3,7 +3,7 @@ import React, { useState, useCallback, useRef, useEffect } from "react";
 import { ChatWindow, ChatMessage } from "./components/ChatWindow";
 import ChatInput from "./components/ChatInput";
 import type { Location } from "./components/LocationDropdown";
-import { AddCircle } from "iconsax-react";
+import { AddCircleIcon } from "./components/icons";
 
 // Default user priorities — wire to a settings panel later
 const DEFAULT_PRIORITIES = {
@@ -134,7 +134,7 @@ export default function Home() {
           </h1>
         </div>
         <button className="p-1.5 -mr-1 text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 rounded-xl transition-colors">
-          <AddCircle size={22} variant="Linear" />
+          <AddCircleIcon size={22} />
         </button>
       </header>
 

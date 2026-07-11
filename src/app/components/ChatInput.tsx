@@ -2,7 +2,7 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
 import LocationDropdown from "./LocationDropdown";
 import type { Location } from "./LocationDropdown";
-import { Location as LocationIcon, Send2 } from "iconsax-react";
+import { LocationIcon, Send2Icon } from "./icons";
 
 type Props = {
   onSend: (text: string, locations: Location[]) => void;
@@ -200,6 +200,7 @@ const ChatInput: React.FC<Props> = ({ onSend, isSending, onLocationSelect }) => 
             ref={editorRef}
             contentEditable={!isSending}
             suppressContentEditableWarning
+            dangerouslySetInnerHTML={{ __html: "" }}
             onInput={handleInput}
             onKeyDown={handleKeyDown}
             className="chat-editor w-full min-h-[28px] max-h-40 overflow-y-auto text-zinc-800 focus:outline-none text-[0.95rem] py-1 leading-relaxed"
@@ -222,7 +223,7 @@ const ChatInput: React.FC<Props> = ({ onSend, isSending, onLocationSelect }) => 
             className="text-zinc-400 hover:text-blue-500 hover:bg-blue-50 p-2 rounded-full transition-colors flex items-center justify-center"
             title="Pin a location"
           >
-            <LocationIcon size={20} variant="Linear" />
+            <LocationIcon size={20} />
           </button>
 
           {/* Send */}
@@ -234,7 +235,7 @@ const ChatInput: React.FC<Props> = ({ onSend, isSending, onLocationSelect }) => 
             {isSending ? (
               <span className="w-1.5 h-1.5 bg-white rounded-full animate-ping" />
             ) : (
-              <Send2 size={18} variant="Bold" className="rotate-45 -translate-x-px" />
+              <Send2Icon size={18} className="rotate-45 -translate-x-px" />
             )}
           </button>
         </div>

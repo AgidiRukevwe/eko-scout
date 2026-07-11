@@ -1,6 +1,6 @@
 "use client";
 import React, { useEffect, useRef, useState } from "react";
-import { Location as LocationIcon, Gps } from "iconsax-react";
+import { LocationIcon, GpsIcon } from "./icons";
 
 export interface Location {
   id: string;
@@ -117,7 +117,7 @@ export default function LocationDropdown({ query, onSelect }: Props) {
               className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-blue-50 transition-colors border-b border-zinc-100"
             >
               <div className="flex shrink-0 items-center justify-center text-blue-600 bg-blue-100/50 p-1.5 rounded-full">
-                <Gps size={14} variant="Linear" />
+                <GpsIcon size={14} />
               </div>
               <span className="text-[0.95rem] font-medium text-blue-700">Use Current Location</span>
             </button>
@@ -128,14 +128,13 @@ export default function LocationDropdown({ query, onSelect }: Props) {
               <button
                 type="button"
                 onMouseDown={(e) => {
-                  // Prevent textarea blur before click registers
-                  e.preventDefault();
+                  e.preventDefault(); // Prevents contentEditable from losing focus
                   onSelect(loc);
                 }}
                 className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-zinc-50 transition-colors"
               >
                 <div className="flex shrink-0 items-center justify-center text-blue-500">
-                  <LocationIcon size={16} variant="Linear" />
+                  <LocationIcon size={16} />
                 </div>
                 <span>
                   <span className="block text-[0.95rem] text-zinc-700">{loc.name}</span>

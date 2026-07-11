@@ -1,7 +1,7 @@
 "use client";
 import React, { useMemo, useState, useEffect } from "react";
 import { marked } from "marked";
-import { Like1, Dislike, Refresh2, Copy, TickCircle, Edit2 } from "iconsax-react";
+import { Like1Icon, DislikeIcon, Refresh2Icon, CopyIcon, TickCircleIcon, Edit2Icon } from "./icons";
 
 interface MessageProps {
   role: "user" | "assistant";
@@ -84,7 +84,7 @@ export default function Message({ role, content, isStreaming, onEdit }: MessageP
                     className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-zinc-700 transition-all p-1 -mr-2 -mt-1 rounded hover:bg-zinc-200"
                     title="Edit message"
                   >
-                    <Edit2 size={15} variant="Linear" />
+                    <Edit2Icon size={15} />
                   </button>
                 )}
               </div>
@@ -121,13 +121,13 @@ export default function Message({ role, content, isStreaming, onEdit }: MessageP
           <div className="flex items-center gap-2 mt-3 ml-2">
             <div className="flex items-center bg-zinc-50 rounded-full border border-zinc-100 p-1">
               <button className="p-1.5 text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 rounded-full transition-colors" title="Helpful">
-                <Like1 size={18} variant="Linear" />
+                <Like1Icon size={18} />
               </button>
               <button className="p-1.5 text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 rounded-full transition-colors" title="Not helpful">
-                <Dislike size={18} variant="Linear" />
+                <DislikeIcon size={18} />
               </button>
               <button className="p-1.5 text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 rounded-full transition-colors" title="Regenerate">
-                <Refresh2 size={18} variant="Linear" />
+                <Refresh2Icon size={18} />
               </button>
             </div>
             <button
@@ -140,9 +140,9 @@ export default function Message({ role, content, isStreaming, onEdit }: MessageP
               title={copied ? "Copied!" : "Copy text"}
             >
               {copied ? (
-                <TickCircle size={16} variant="Bold" />
+                <TickCircleIcon size={16} />
               ) : (
-                <Copy size={16} variant="Linear" />
+                <CopyIcon size={16} />
               )}
             </button>
           </div>

@@ -1,229 +1,329 @@
-# Refactored OpenCellID Loader with H3 aggregation and clean schema
+"""
+OpenCellID Loader — Raw Import Pipeline
+========================================
+Reads the OpenCellID CSV, computes H3 R9 per tower, normalises carrier names,
+and bulk-inserts into `opencellid_raw`.
+
+Idempotent: ON CONFLICT on (mcc, mnc, lac, cid) performs an UPDATE so
+running the script multiple times does not create duplicate rows.
+
+Usage:
+    python scripts/opencellid_loader.py --input "path/to/opencellid_data.csv"
+
+Environment:
+    DATABASE_URL — Neon / PostgreSQL connection string (or pass --db-url)
+
+Official Nigerian MNC assignments (MCC 621):
+    mnc=20 → Airtel   (formerly Zain / Econet)
+    mnc=30 → MTN
+    mnc=50 → Glo
+    mnc=60 → 9mobile  (formerly Etisalat)
+"""
+
 import os
 import sys
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
+
 import pandas as pd
 import h3
-# import modifications
-from sqlalchemy import create_engine, Column, String, Integer, DateTime, text
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-Base = declarative_base()
+from sqlalchemy import create_engine, text
 
+# ---------------------------------------------------------------------------
+# Environment
+# ---------------------------------------------------------------------------
 
-# -----------------------------------------------------------------------------
-# Load environment variables from .env.local or .env (if present)
-# -----------------------------------------------------------------------------
 def load_env_files():
     for filename in [".env.local", ".env"]:
         if os.path.exists(filename):
-            print(f"Loading environment variables from {filename}")
             try:
-                with open(filename, "r") as f:
+                with open(filename) as f:
                     for line in f:
                         line = line.strip()
                         if not line or line.startswith("#") or "=" not in line:
                             continue
-                        key, value = line.split("=", 1)
+                        key, _, value = line.partition("=")
                         key = key.strip()
                         value = value.strip().strip('"').strip("'")
-                        if key and value:
+                        if key:
                             os.environ[key] = value
             except Exception as e:
-                print(f"Warning: Failed to load {filename}: {e}")
+                print(f"Warning: failed to load {filename}: {e}")
 
 load_env_files()
 
-# -----------------------------------------------------------------------------
-# SQLAlchemy model – one row per H3 index (Resolution 9, ~100 m)
-# -----------------------------------------------------------------------------
-class H3StagingInternet(Base):
-    __tablename__ = "h3_staging_internet"
-    # Primary key – the H3 index string (15 characters)
-    h3_index = Column(String, primary_key=True)
-    # Signal quality per carrier – defaults to 'Poor'
-    mtn_signal = Column(String, nullable=False, default='Poor')
-    airtel_signal = Column(String, nullable=False, default='Poor')
-    glo_signal = Column(String, nullable=False, default='Poor')
-    nine_mobile_signal = Column(String, nullable=False, default='Poor')
-    # Highest generation available in this block (e.g., 4G, 3G, 2G)
-    max_generation_available = Column(String, nullable=False, default='2G')
-    # Composite internet score (0‑100)
-    internet_score = Column(Integer, nullable=False, default=30)
+# ---------------------------------------------------------------------------
+# Carrier map — official Nigerian MNC assignments (MCC 621)
+# Source: ITU / NCC Nigeria operator registry
+# ---------------------------------------------------------------------------
+# MCC 621 = Nigeria
+CARRIER_MAP: dict[int, str] = {
+    20: "Airtel",    # Airtel (formerly Zain / Econet)
+    30: "MTN",
+    50: "Glo",
+    60: "9mobile",   # 9mobile (formerly Etisalat)
+}
 
-    def __repr__(self):
-        return f"<H3StagingInternet({self.h3_index})>"
+# OpenCellID radio values → canonical technology strings stored in DB
+RADIO_NORMALISE: dict[str, str] = {
+    "GSM":  "GSM",
+    "UMTS": "UMTS",
+    "LTE":  "LTE",
+    "NR":   "NR",   # 5G New Radio
+}
 
+# Lagos bounding box (lat_min, lat_max, lng_min, lng_max)
+# Adjust if you want to import towers outside this window.
+LAGOS_BOUNDS = {
+    "lat_min": 6.35,
+    "lat_max": 6.70,
+    "lng_min": 3.10,
+    "lng_max": 3.60,
+}
 
-# -----------------------------------------------------------------------------
-# Helper: convert lat/lon to H3 Resolution 9 hexagon ID
-# -----------------------------------------------------------------------------
-def latlng_to_h3_res9(lat, lng):
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _to_h3(lat: float, lng: float) -> str | None:
     try:
-        return h3.geo_to_h3(lat, lng, 9)
-    except AttributeError:
         return h3.latlng_to_cell(lat, lng, 9)
+    except AttributeError:
+        return h3.geo_to_h3(lat, lng, 9)
+    except Exception:
+        return None
 
-# -----------------------------------------------------------------------------
-# Main loader – reads raw OpenCellID CSV, aggregates, and writes to Neon DB
-# -----------------------------------------------------------------------------
-def run_loader(input_file: str, db_url: str):
-    print("=== Starting Refactored OpenCellID Loader ===")
-    print(f"Input file: {input_file}")
 
-    # ---------------------------------------------------------------------
-    # 1️⃣ Load CSV – no header, keep everything as string for safe processing
-    # ---------------------------------------------------------------------
+def _epoch_to_ts(value) -> datetime | None:
     try:
-        df = pd.read_csv(input_file, header=None, dtype=str)
-    except Exception as e:
-        print(f"Error reading CSV: {e}")
-        return
+        epoch = int(float(str(value)))
+        if epoch <= 0:
+            return None
+        return datetime.fromtimestamp(epoch, tz=timezone.utc)
+    except Exception:
+        return None
 
-    # ---------------------------------------------------------------------
-    # 2️⃣ Filter to Lagos region and MCC 621 (Nigeria)
-    #    Expected column indexes:
-    #    0 = radio, 1 = mcc, 2 = mnc, 6 = lon, 7 = lat
-    # ---------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# CSV column positions (OpenCellID export — no header row)
+# ---------------------------------------------------------------------------
+CSV_COLS = {
+    "radio":         0,
+    "mcc":           1,
+    "mnc":           2,
+    "lac":           3,
+    "cid":           4,
+    # column 5 = unit (unused)
+    "longitude":     6,
+    "latitude":      7,
+    "range":         8,
+    "samples":       9,
+    # column 10 = changeable (unused)
+    "created":       11,
+    "updated":       12,
+    "avg_signal":    13,
+}
+
+
+# ---------------------------------------------------------------------------
+# Main loader
+# ---------------------------------------------------------------------------
+
+def run_loader(input_file: str, db_url: str, dry_run: bool = False):
+    print("=== OpenCellID Raw Loader ===")
+    print(f"Input:   {input_file}")
+    print(f"Dry-run: {dry_run}")
+
+    # ------------------------------------------------------------------
+    # 1. Load CSV
+    # ------------------------------------------------------------------
     try:
-        df = df[(df[1] == "621")]
-        df = df[(df[7].astype(float).between(6.35, 6.70)) & (df[6].astype(float).between(3.10, 3.60))]
+        df = pd.read_csv(input_file, header=None, dtype=str, low_memory=False)
+    except FileNotFoundError:
+        print(f"ERROR: file not found — {input_file}")
+        sys.exit(1)
     except Exception as e:
-        print(f"Error during Lagos/MCC filtering: {e}")
-        return
+        print(f"ERROR reading CSV: {e}")
+        sys.exit(1)
+
+    print(f"Rows loaded:  {len(df):,}")
+
+    # ------------------------------------------------------------------
+    # 2. Filter: Nigeria MCC + Lagos bounds
+    # ------------------------------------------------------------------
+    df = df[df[CSV_COLS["mcc"]] == "621"].copy()
+
+    lats = pd.to_numeric(df[CSV_COLS["latitude"]],  errors="coerce")
+    lngs = pd.to_numeric(df[CSV_COLS["longitude"]], errors="coerce")
+
+    mask = (
+        lats.between(LAGOS_BOUNDS["lat_min"], LAGOS_BOUNDS["lat_max"]) &
+        lngs.between(LAGOS_BOUNDS["lng_min"], LAGOS_BOUNDS["lng_max"])
+    )
+    df = df[mask].copy()
+    print(f"After Lagos filter: {len(df):,} rows")
 
     if df.empty:
-        print("No rows match Lagos boundaries – exiting.")
+        print("No rows match bounds — exiting.")
         return
 
-    # ---------------------------------------------------------------------
-    # 3️⃣ Compute H3 index for each row (Resolution 9 ≈ 100 m)
-    # ---------------------------------------------------------------------
-    def compute_h3(row):
-        try:
-            lat = float(row[7])
-            lng = float(row[6])
-            return latlng_to_h3_res9(lat, lng)
-        except Exception:
-            return None
+    # ------------------------------------------------------------------
+    # 3. Parse + enrich
+    # ------------------------------------------------------------------
+    records = []
+    skipped = 0
 
-    df['h3_index'] = df.apply(compute_h3, axis=1)
-    df = df.dropna(subset=['h3_index'])
-
-    # ---------------------------------------------------------------------
-    # 4️⃣ Aggregate towers per H3 block – keep best signal per carrier
-    # ---------------------------------------------------------------------
-    signal_rank = {"Excellent": 3, "Good": 2, "Poor": 1}
-    gen_map = {"LTE": "4G", "UMTS": "3G", "GSM": "2G"}
-
-    agg_dict = {}
     for _, row in df.iterrows():
-        h3_idx = row['h3_index']
-        # Clean and normalize values
-        mnc_raw = row[2]
-        mnc = int(float(mnc_raw)) if pd.notnull(mnc_raw) else 0
-        radio_raw = row[0]
-        radio = str(radio_raw).upper().strip() if pd.notnull(radio_raw) else ""
+        try:
+            radio_raw = str(row[CSV_COLS["radio"]]).strip().upper()
+            radio = RADIO_NORMALISE.get(radio_raw)
+            if radio is None:
+                skipped += 1
+                continue
 
-        # Ensure entry exists with all carriers
-        entry = agg_dict.setdefault(h3_idx, {
-            "mtn_signal": "Poor",
-            "airtel_signal": "Poor",
-            "glo_signal": "Poor",
-            "nine_mobile_signal": "Poor",
-            "max_generation_available": "2G",
-        })
+            mnc = int(float(row[CSV_COLS["mnc"]]))
+            carrier_name = CARRIER_MAP.get(mnc)
+            if carrier_name is None:
+                # Unknown carrier for this MCC — skip silently
+                skipped += 1
+                continue
 
-        # Determine signal tier and generation
-        if "LTE" in radio:
-            current_tier = "Excellent"
-            generation = "4G"
-        elif "UMTS" in radio or "WCDMA" in radio:
-            current_tier = "Good"
-            generation = "3G"
-        else:
-            current_tier = "Poor"
-            generation = "2G"
+            lat = float(row[CSV_COLS["latitude"]])
+            lng = float(row[CSV_COLS["longitude"]])
+            h3_r9 = _to_h3(lat, lng)
+            if h3_r9 is None:
+                skipped += 1
+                continue
 
-        # Map carrier tokens accurately (20=Airtel, 60=9mobile, 50=Glo, 30=Mtn)
-        if mnc == 20:
-            carrier_key = "airtel_signal"
-        elif mnc == 60:
-            carrier_key = "nine_mobile_signal"
-        elif mnc == 50:
-            carrier_key = "glo_signal"
-        elif mnc == 30:
-            carrier_key = "mtn_signal"
-        else:
-            carrier_key = None
+            def _int(col):
+                try: return int(float(row[col]))
+                except: return None
 
-        if carrier_key:
-            # Keep the best signal for the carrier
-            if signal_rank[current_tier] > signal_rank[entry[carrier_key]]:
-                entry[carrier_key] = current_tier
+            records.append({
+                "radio":              radio,
+                "mcc":                621,
+                "mnc":                mnc,
+                "carrier_name":       carrier_name,
+                "lac":                _int(CSV_COLS["lac"]),
+                "cid":                _int(CSV_COLS["cid"]),
+                "latitude":           lat,
+                "longitude":          lng,
+                "range":              _int(CSV_COLS["range"]),
+                "samples":            _int(CSV_COLS["samples"]),
+                "average_signal":     _int(CSV_COLS["avg_signal"]),
+                "created_timestamp":  _epoch_to_ts(row[CSV_COLS["created"]]),
+                "updated_timestamp":  _epoch_to_ts(row[CSV_COLS["updated"]]),
+                "h3_r9":              h3_r9,
+            })
+        except Exception:
+            skipped += 1
+            continue
 
-        # Update max generation if higher
-        gen_rank = {"2G": 1, "3G": 2, "4G": 3}
-        if gen_rank[generation] > gen_rank[entry["max_generation_available"]]:
-            entry["max_generation_available"] = generation
+    print(f"Parsed: {len(records):,} valid rows | skipped: {skipped:,}")
 
-    # ---------------------------------------------------------------------
-    # 5️⃣ Compute internet_score per aggregated block
-    # ---------------------------------------------------------------------
-    for entry in agg_dict.values():
-        if "Excellent" in (entry["mtn_signal"], entry["airtel_signal"], entry["glo_signal"]):
-            entry["internet_score"] = 85
-        elif "Good" in (entry["mtn_signal"], entry["airtel_signal"], entry["glo_signal"]):
-            entry["internet_score"] = 65
-        else:
-            entry["internet_score"] = 30
+    if dry_run:
+        print("[dry-run] Would insert the above rows. No DB changes made.")
+        return
 
-    # ---------------------------------------------------------------------
-    # 6️⃣ Recreate clean database table (drop old, create new)
-    # ---------------------------------------------------------------------
-    engine = create_engine(db_url)
+    # ------------------------------------------------------------------
+    # 4. Connect + migrate schema
+    # ------------------------------------------------------------------
+    engine = create_engine(db_url, pool_pre_ping=True)
+
+    migration_path = os.path.join(
+        os.path.dirname(__file__), "..", "db", "migrations", "006_network.sql"
+    )
+    migration_path = os.path.normpath(migration_path)
+
     with engine.begin() as conn:
+        # Apply schema migration (idempotent — uses IF NOT EXISTS)
+        if os.path.exists(migration_path):
+            with open(migration_path) as f:
+                conn.execute(text(f.read()))
+            print("Schema migration applied.")
+        else:
+            print(f"WARNING: migration file not found at {migration_path}")
+
+        # Drop old table if still present
         conn.execute(text("DROP TABLE IF EXISTS h3_staging_internet"))
-    Base.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine)
-    session = Session()
+        print("Dropped h3_staging_internet (if it existed).")
 
-    # ---------------------------------------------------------------------
-    # 7️⃣ Bulk insert aggregated rows
-    # ---------------------------------------------------------------------
-    objects = []
-    for h3_idx, data in agg_dict.items():
-        obj = H3StagingInternet(
-            h3_index=h3_idx,
-            mtn_signal=data.get("mtn_signal", "Poor"),
-            airtel_signal=data.get("airtel_signal", "Poor"),
-            glo_signal=data.get("glo_signal", "Poor"),
-            max_generation_available=data.get("max_generation_available", "2G"),
-            internet_score=data.get("internet_score", 30),
-        )
-        objects.append(obj)
+    # ------------------------------------------------------------------
+    # 5. Idempotent bulk insert
+    #    Conflict key: (mcc, mnc, lac, cid)  — uniquely identifies a cell.
+    #    On conflict: update mutable fields (range, samples, signal, h3_r9, timestamps).
+    # ------------------------------------------------------------------
+    BATCH = 2000
+    inserted = 0
+    updated = 0
 
-    try:
-        session.bulk_save_objects(objects)
-        session.commit()
-        print(f"Aggregated insert complete – {len(objects)} H3 rows written.")
-    except Exception as e:
-        session.rollback()
-        print(f"Error during bulk insert: {e}")
-    finally:
-        session.close()
+    with engine.begin() as conn:
+        # Ensure unique constraint exists for idempotency
+        conn.execute(text("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_opencellid_tower
+            ON opencellid_raw (mcc, mnc, lac, cid)
+        """))
 
-# -----------------------------------------------------------------------------
-# CLI entry point
-# -----------------------------------------------------------------------------
+    for i in range(0, len(records), BATCH):
+        batch = records[i : i + BATCH]
+        with engine.begin() as conn:
+            result = conn.execute(
+                text("""
+                    INSERT INTO opencellid_raw
+                        (radio, mcc, mnc, carrier_name, lac, cid,
+                         latitude, longitude, range, samples, average_signal,
+                         created_timestamp, updated_timestamp, h3_r9)
+                    VALUES
+                        (:radio, :mcc, :mnc, :carrier_name, :lac, :cid,
+                         :latitude, :longitude, :range, :samples, :average_signal,
+                         :created_timestamp, :updated_timestamp, :h3_r9)
+                    ON CONFLICT (mcc, mnc, lac, cid) DO UPDATE SET
+                        radio              = EXCLUDED.radio,
+                        latitude           = EXCLUDED.latitude,
+                        longitude          = EXCLUDED.longitude,
+                        range              = EXCLUDED.range,
+                        samples            = EXCLUDED.samples,
+                        average_signal     = EXCLUDED.average_signal,
+                        updated_timestamp  = EXCLUDED.updated_timestamp,
+                        h3_r9              = EXCLUDED.h3_r9
+                """),
+                batch
+            )
+        inserted += len(batch)
+        print(f"  Batch {i // BATCH + 1}: {len(batch)} rows upserted")
+
+    print(f"\n✓ Done — {inserted:,} rows upserted into opencellid_raw.")
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Load and aggregate OpenCellID data into Neon DB")
-    parser.add_argument("--input", required=True, help="Path to raw OpenCellID CSV file (no header)")
-    parser.add_argument("--db-url", default=None, help="Database URL (fallback to DATABASE_URL env var)")
+    parser = argparse.ArgumentParser(
+        description="Import OpenCellID tower data into opencellid_raw"
+    )
+    parser.add_argument(
+        "--input",
+        required=True,
+        help='Path to raw OpenCellID CSV (no header). '
+             r'Example: "src/lib/csv files/opencellid_data copy.csv"'
+    )
+    parser.add_argument(
+        "--db-url",
+        default=None,
+        help="PostgreSQL connection string (fallback: DATABASE_URL env var)"
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Parse and validate the CSV without writing to the database"
+    )
     args = parser.parse_args()
+
     db_url = args.db_url or os.environ.get("DATABASE_URL")
-    if not db_url:
-        print("Database URL not provided – set DATABASE_URL env or pass --db-url")
+    if not db_url and not args.dry_run:
+        print("ERROR: DATABASE_URL not set. Pass --db-url or set the environment variable.")
         sys.exit(1)
-    run_loader(args.input, db_url)
+
+    run_loader(args.input, db_url or "", args.dry_run)

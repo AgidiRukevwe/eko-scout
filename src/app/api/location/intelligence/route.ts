@@ -3,6 +3,13 @@ import { NextResponse } from "next/server";
 import { safeQuery } from "@/lib/db";
 import { enrich_with_h3 } from "@/core/h3_utils";
 import * as h3 from "h3-js";
+import {
+  getKRingCells,
+  filterTowersByRadius,
+  scoreAllCarriers,
+  type RawTower,
+  type H3NetworkFeatures,
+} from "@/core/network_score";
 
 // ---------- Types ----------
 /** Row returned from the electricity_h3_features table */
@@ -159,6 +166,52 @@ async function fetchElectricityIntelligence(lat: number, lng: number): Promise<E
   return { dominant, secondary, nearest_bands };
 }
 
+/**
+ * Network intelligence — property-level tower lookup.
+ *
+ * Steps:
+ *   1. Convert lat/lng to H3 R9 cell.
+ *   2. Build k=2 gridDisk (19 cells).
+ *   3. Query all opencellid_raw towers within that disk.
+ *   4. Filter by technology-specific max radius (5G/LTE: 2 km, 3G/GSM: 5 km).
+ *   5. Fetch the H3 aggregated features row for coarse context.
+ *   6. Score all four carriers via scoreAllCarriers().
+ */
+async function fetchNetworkIntelligence(lat: number, lng: number) {
+  // Step 1-2: k=2 ring
+  const ringCells = getKRingCells(lat, lng, 2);
+  const placeholders = ringCells.map((_, i) => `$${i + 1}`).join(', ');
+
+  // Step 3: Fetch all candidate towers from the ring
+  const towerRows = await safeQuery<RawTower>(
+    `SELECT carrier_name, radio, latitude, longitude, samples
+     FROM opencellid_raw
+     WHERE h3_r9 IN (${placeholders})`,
+    ringCells
+  );
+
+  // Step 4: Filter by technology-specific radius
+  const candidateTowers: RawTower[] = (towerRows ?? []).map((r) => ({
+    carrier_name: r.carrier_name,
+    radio:        r.radio,
+    latitude:     Number(r.latitude),
+    longitude:    Number(r.longitude),
+    samples:      Number(r.samples),
+  }));
+  const nearbyTowers = filterTowersByRadius(candidateTowers, lat, lng);
+
+  // Step 5: Fetch H3 aggregated features (exact cell only — used for context bonus)
+  const h3Cell = h3.latLngToCell(lat, lng, 9);
+  const featureRows = await safeQuery<H3NetworkFeatures>(
+    `SELECT * FROM h3_network_features WHERE h3_index = $1`,
+    [h3Cell]
+  );
+  const features: H3NetworkFeatures | null = featureRows?.[0] ?? null;
+
+  // Step 6: Score all carriers
+  return scoreAllCarriers(features, nearbyTowers, lat, lng);
+}
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const lat = Number(searchParams.get("lat"));
@@ -178,8 +231,8 @@ export async function GET(req: Request) {
   // Electricity intelligence – limited to nearby H3 cells.
   const electricity = await fetchElectricityIntelligence(lat, lng);
 
-  // Flood intelligence – exact match (disabled until flood table is seeded).
-  // const flood = await fetchRow<any>("flood", h3_r9);
+  // Network (mobile connectivity) intelligence – k=2 ring, tech-specific radius filter.
+  const network = await fetchNetworkIntelligence(lat, lng);
 
   // Nearby accessibility – aggregated per category.
   const nearby = await fetchNearbyAccessibility(lat, lng, radius);
@@ -189,11 +242,13 @@ export async function GET(req: Request) {
     environmental_intelligence: env.row,
     environmental_expansion: env.expansion,
     electricity_intelligence: electricity,
+    network_intelligence: network,
     // flood_intelligence: flood ?? null,
     nearby_accessibility: nearby,
     confidence: {
       environmental: env.row?.confidence_score ?? null,
       electricity: electricity.dominant?.confidence_score ?? null,
+      network: network.confidence_score ?? null,
       flood: null // flood?.confidence_score ?? null
     }
   };

@@ -11,6 +11,15 @@
  *   - opencellid_raw table → precise, per-tower distance weighting.
  *   - The database never stores labels or scores — this module calculates them live.
  *
+ * Tower lookup (property-level):
+ *   1. Convert property lat/lng to H3 R9 cell.
+ *   2. Generate k=2 gridDisk (19 cells) around that cell.
+ *   3. Query opencellid_raw WHERE h3_r9 = ANY(ring_cells).
+ *   4. Filter by technology-specific max radius (haversine):
+ *        5G (NR) / LTE : 2 km
+ *        3G (UMTS) / GSM: 5 km
+ *   5. Pass filtered towers into scoreCarrier().
+ *
  * Technology weights (user-specified):
  *   5G (NR)  = 5
  *   LTE      = 3
@@ -126,8 +135,27 @@ const LABEL_THRESHOLDS: Array<{ minScore: number; label: CarrierScore['label'] }
 
 // ─── H3 k-ring size used for nearby tower lookup ──────────────────────────────
 
-/** k=1 gives a ring of 7 cells (the target cell + its 6 immediate neighbours). */
-const KRING_K = 1;
+/**
+ * k=2 gives a disk of 19 cells.
+ * This ensures towers that are geographically close but fall in an adjacent
+ * H3 cell are not missed.
+ */
+const KRING_K = 2;
+
+/**
+ * Technology-specific maximum search radius in metres.
+ * Towers beyond this range for a given technology are excluded
+ * before distance-weighted scoring.
+ *
+ * 5G / LTE : 2 km  (high-frequency, shorter propagation)
+ * 3G / GSM : 5 km  (lower-frequency, longer propagation)
+ */
+export const TECH_MAX_RADIUS_M: Record<string, number> = {
+  NR:   2000,  // 5G New Radio
+  LTE:  2000,  // 4G LTE
+  UMTS: 5000,  // 3G UMTS / WCDMA
+  GSM:  5000,  // 2G GSM
+};
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -172,12 +200,35 @@ function scoreToLabel(score: number): CarrierScore['label'] {
 }
 
 /**
- * Get the H3 R9 cell ring (k=1) around a lat/lng point.
- * Returns an array of H3 index strings to query against opencellid_raw.
+ * Get the H3 R9 gridDisk of radius k around a lat/lng point.
+ * Default k=2 (19 cells) ensures geographically close towers in adjacent
+ * cells are captured, not just the property's own cell.
+ * Returns H3 index strings to pass as `WHERE h3_r9 = ANY($cells)` in SQL.
  */
 export function getKRingCells(lat: number, lng: number, k = KRING_K): string[] {
   const centre = h3lib.latLngToCell(lat, lng, 9);
   return h3lib.gridDisk(centre, k);
+}
+
+/**
+ * Filter a set of raw towers by the technology-specific maximum search radius.
+ * Call this AFTER fetching towers from the k-ring, BEFORE passing to scoreCarrier().
+ *
+ * @param towers      - Candidate towers from opencellid_raw (k-ring query result)
+ * @param propertyLat - Property latitude
+ * @param propertyLng - Property longitude
+ */
+export function filterTowersByRadius(
+  towers: RawTower[],
+  propertyLat: number,
+  propertyLng: number,
+): RawTower[] {
+  return towers.filter((t) => {
+    const maxRadius = TECH_MAX_RADIUS_M[t.radio];
+    if (maxRadius === undefined) return false; // unknown tech — exclude
+    const distM = haversineMetres(propertyLat, propertyLng, t.latitude, t.longitude);
+    return distM <= maxRadius;
+  });
 }
 
 // ─── Key lookup helpers per carrier ───────────────────────────────────────────

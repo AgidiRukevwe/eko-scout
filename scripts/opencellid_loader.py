@@ -138,7 +138,7 @@ def run_loader(input_file: str, db_url: str, dry_run: bool = False):
     # 1. Load CSV
     # ------------------------------------------------------------------
     try:
-        df = pd.read_csv(input_file, header=None, dtype=str, low_memory=False)
+        df = pd.read_csv(input_file, header=None, names=range(14), dtype=str, low_memory=False, on_bad_lines='skip')
     except FileNotFoundError:
         print(f"ERROR: file not found — {input_file}")
         sys.exit(1)
@@ -249,14 +249,14 @@ def run_loader(input_file: str, db_url: str, dry_run: bool = False):
         print("Dropped h3_staging_internet (if it existed).")
 
     # ------------------------------------------------------------------
-    # 5. Idempotent bulk insert
+    # 5. Idempotent bulk insert (ELT pattern)
     #    Conflict key: (mcc, mnc, lac, cid)  — uniquely identifies a cell.
-    #    On conflict: update mutable fields (range, samples, signal, h3_r9, timestamps).
     # ------------------------------------------------------------------
-    BATCH = 2000
-    inserted = 0
-    updated = 0
+    df_insert = pd.DataFrame(records)
+    print("Uploading to staging table...")
+    df_insert.to_sql("opencellid_raw_temp", engine, if_exists="replace", index=False, method="multi", chunksize=1000)
 
+    print("Merging from staging to main table...")
     with engine.begin() as conn:
         # Ensure unique constraint exists for idempotency
         conn.execute(text("""
@@ -264,35 +264,30 @@ def run_loader(input_file: str, db_url: str, dry_run: bool = False):
             ON opencellid_raw (mcc, mnc, lac, cid)
         """))
 
-    for i in range(0, len(records), BATCH):
-        batch = records[i : i + BATCH]
-        with engine.begin() as conn:
-            result = conn.execute(
-                text("""
-                    INSERT INTO opencellid_raw
-                        (radio, mcc, mnc, carrier_name, lac, cid,
-                         latitude, longitude, range, samples, average_signal,
-                         created_timestamp, updated_timestamp, h3_r9)
-                    VALUES
-                        (:radio, :mcc, :mnc, :carrier_name, :lac, :cid,
-                         :latitude, :longitude, :range, :samples, :average_signal,
-                         :created_timestamp, :updated_timestamp, :h3_r9)
-                    ON CONFLICT (mcc, mnc, lac, cid) DO UPDATE SET
-                        radio              = EXCLUDED.radio,
-                        latitude           = EXCLUDED.latitude,
-                        longitude          = EXCLUDED.longitude,
-                        range              = EXCLUDED.range,
-                        samples            = EXCLUDED.samples,
-                        average_signal     = EXCLUDED.average_signal,
-                        updated_timestamp  = EXCLUDED.updated_timestamp,
-                        h3_r9              = EXCLUDED.h3_r9
-                """),
-                batch
-            )
-        inserted += len(batch)
-        print(f"  Batch {i // BATCH + 1}: {len(batch)} rows upserted")
-
-    print(f"\n✓ Done — {inserted:,} rows upserted into opencellid_raw.")
+        result = conn.execute(text("""
+            INSERT INTO opencellid_raw
+                (radio, mcc, mnc, carrier_name, lac, cid,
+                 latitude, longitude, range, samples, average_signal,
+                 created_timestamp, updated_timestamp, h3_r9)
+            SELECT
+                radio, CAST(mcc AS INTEGER), CAST(mnc AS INTEGER), carrier_name, CAST(lac AS INTEGER), CAST(cid AS INTEGER),
+                CAST(latitude AS DOUBLE PRECISION), CAST(longitude AS DOUBLE PRECISION), CAST(range AS INTEGER), CAST(samples AS INTEGER), CAST(average_signal AS INTEGER),
+                CAST(created_timestamp AS TIMESTAMP WITH TIME ZONE), CAST(updated_timestamp AS TIMESTAMP WITH TIME ZONE), h3_r9
+            FROM opencellid_raw_temp
+            ON CONFLICT (mcc, mnc, lac, cid) DO UPDATE SET
+                radio              = EXCLUDED.radio,
+                latitude           = EXCLUDED.latitude,
+                longitude          = EXCLUDED.longitude,
+                range              = EXCLUDED.range,
+                samples            = EXCLUDED.samples,
+                average_signal     = EXCLUDED.average_signal,
+                updated_timestamp  = EXCLUDED.updated_timestamp,
+                h3_r9              = EXCLUDED.h3_r9
+        """))
+        
+        conn.execute(text("DROP TABLE opencellid_raw_temp"))
+        
+    print(f"\n✓ Done — {result.rowcount} rows affected (inserted or updated) into opencellid_raw.")
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 "use client";
 import React, { useMemo, useState, useEffect } from "react";
 import { marked } from "marked";
-import { Like1Icon, DislikeIcon, Refresh2Icon, CopyIcon, TickCircleIcon, Edit2Icon } from "./icons";
+import { Like1Icon, DislikeIcon, Refresh2Icon, CopyIcon, TickCircleIcon, Edit2Icon, LocationIcon } from "./icons";
 
 interface MessageProps {
   role: "user" | "assistant";
@@ -73,7 +73,17 @@ export default function Message({ role, content, isStreaming, onEdit }: MessageP
             ) : (
               <div className="flex items-start justify-between gap-4">
                 <span>
-                  {content}
+                  {content.split(/(@[a-zA-Z0-9\s,-]+)/g).map((part, i) => {
+                    if (part.startsWith('@')) {
+                      return (
+                        <span key={i} className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 border border-blue-200 rounded-full px-2 py-px mx-0.5 text-[0.85rem] font-medium align-middle">
+                          <LocationIcon size={12} className="opacity-70" />
+                          {part.slice(1)}
+                        </span>
+                      );
+                    }
+                    return <React.Fragment key={i}>{part}</React.Fragment>;
+                  })}
                   {isStreaming && (
                     <span className="inline-block w-0.5 h-4 ml-0.5 align-middle bg-zinc-800/50 animate-pulse rounded" />
                   )}

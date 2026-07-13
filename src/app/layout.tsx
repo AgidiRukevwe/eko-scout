@@ -5,7 +5,6 @@ import { Newsreader } from 'next/font/google';
 const geist = Geist({ subsets: ['latin'], variable: '--font-geist' });
 const newsreader = Newsreader({
   subsets: ['latin'],
-  style: ['normal', 'italic'],
   variable: '--font-newsreader',
 });
 

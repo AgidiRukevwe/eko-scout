@@ -73,7 +73,7 @@ function readEditorContent(el: HTMLElement): { text: string; locations: Location
         const lat = elem.dataset.chipLat ? Number(elem.dataset.chipLat) : undefined;
         const lng = elem.dataset.chipLng ? Number(elem.dataset.chipLng) : undefined;
         const id = elem.dataset.chipId ?? name;
-        text += name;
+        text += `@${name}`;
         if (!locations.some((l) => l.id === id)) {
           locations.push({ id, name, lat, lng });
         }
@@ -186,7 +186,6 @@ const ChatInput: React.FC<Props> = ({ onSend, isSending, onLocationSelect }) => 
           <div
             ref={editorRef}
             suppressContentEditableWarning
-            dangerouslySetInnerHTML={initialHtml.current}
             onInput={handleInput}
             onKeyDown={handleKeyDown}
             className="chat-editor w-full min-h-[28px] max-h-40 overflow-y-auto text-zinc-800 focus:outline-none text-[0.95rem] py-1 leading-relaxed"

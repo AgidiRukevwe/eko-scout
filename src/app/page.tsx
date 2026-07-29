@@ -5,6 +5,8 @@ import ChatInput from "./components/ChatInput";
 import type { Location } from "./components/LocationDropdown";
 import { AddCircleIcon } from "./components/icons";
 
+import { Button } from "@/components/ui/button";
+
 // Default user priorities — wire to a settings panel later
 const DEFAULT_PRIORITIES = {
   workFromHome: false,
@@ -133,9 +135,9 @@ export default function Home() {
             Adera
           </h1>
         </div>
-        <button className="p-1.5 -mr-1 text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 rounded-xl transition-colors">
+        <Button variant="ghost" size="icon" className="-mr-1 text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 rounded-xl transition-colors">
           <AddCircleIcon size={22} />
-        </button>
+        </Button>
       </header>
 
 

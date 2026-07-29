@@ -1,6 +1,7 @@
 "use client";
 import React, { useEffect, useRef, useState } from "react";
 import { LocationIcon, GpsIcon } from "./icons";
+import { Button } from "@/components/ui/button";
 
 export interface Location {
   id: string;
@@ -93,6 +94,11 @@ export default function LocationDropdown({ query, onSelect }: Props) {
         setLoading(false);
         alert("Unable to retrieve your location. Please check browser permissions.");
         console.error(err);
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: 15000,
       }
     );
   };
@@ -111,38 +117,38 @@ export default function LocationDropdown({ query, onSelect }: Props) {
       <ul className="flex flex-col">
         {showCurrentLocation && (
           <li>
-            <button
-              type="button"
+            <Button
+              variant="ghost"
               onMouseDown={handleCurrentLocationClick}
-              className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-blue-50 transition-colors border-b border-zinc-100"
+              className="w-full flex items-center justify-start gap-3 px-4 py-6 rounded-none text-left border-b border-zinc-100 hover:bg-blue-50"
             >
               <div className="flex shrink-0 items-center justify-center text-blue-600 bg-blue-100/50 p-1.5 rounded-full">
                 <GpsIcon size={14} />
               </div>
               <span className="text-[0.95rem] font-medium text-blue-700">Use Current Location</span>
-            </button>
+            </Button>
           </li>
         )}
         {!loading && results.map((loc) => (
             <li key={loc.id}>
-              <button
-                type="button"
+              <Button
+                variant="ghost"
                 onMouseDown={(e) => {
                   e.preventDefault(); // Prevents contentEditable from losing focus
                   onSelect(loc);
                 }}
-                className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-zinc-50 transition-colors"
+                className="w-full flex items-center justify-start gap-3 px-4 py-6 rounded-none text-left"
               >
                 <div className="flex shrink-0 items-center justify-center text-blue-500">
                   <LocationIcon size={16} />
                 </div>
-                <span>
-                  <span className="block text-[0.95rem] text-zinc-700">{loc.name}</span>
+                <div className="flex flex-col items-start leading-tight">
+                  <span className="text-[0.95rem] font-normal text-zinc-700">{loc.name}</span>
                   {loc.parentArea && (
-                    <span className="block text-[0.75rem] text-zinc-400">{loc.parentArea}</span>
+                    <span className="text-[0.75rem] font-normal text-zinc-400">{loc.parentArea}</span>
                   )}
-                </span>
-              </button>
+                </div>
+              </Button>
             </li>
           ))}
       </ul>

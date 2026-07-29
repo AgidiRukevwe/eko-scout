@@ -3,6 +3,7 @@ import React, { useState, useRef, useCallback, useEffect } from "react";
 import LocationDropdown from "./LocationDropdown";
 import type { Location } from "./LocationDropdown";
 import { LocationIcon, Send2Icon } from "./icons";
+import { Button } from "@/components/ui/button";
 
 type Props = {
   onSend: (text: string, locations: Location[]) => void;
@@ -201,26 +202,29 @@ const ChatInput: React.FC<Props> = ({ onSend, isSending, onLocationSelect }) => 
         </div>
 
         <div className="flex items-center justify-between px-2 pt-1">
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             onMouseDown={handlePinClick}
-            className="text-zinc-400 hover:text-blue-500 hover:bg-blue-50 p-2 rounded-full transition-colors flex items-center justify-center"
+            className="text-zinc-400 hover:text-blue-500 hover:bg-blue-50 rounded-full transition-colors"
             title="Pin a location"
           >
             <LocationIcon size={20} />
-          </button>
+          </Button>
 
-          <button
+          <Button
             onClick={handleSend}
             disabled={isEmpty || isSending}
-            className="w-10 h-10 flex items-center justify-center shrink-0 bg-zinc-800 hover:bg-black disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-full transition-colors"
+            size="icon"
+            className="rounded-full shrink-0"
           >
             {isSending ? (
               <span className="w-1.5 h-1.5 bg-white rounded-full animate-ping" />
             ) : (
               <Send2Icon size={18} className="rotate-45 -translate-x-px" />
             )}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

@@ -2,6 +2,8 @@
 import { NextResponse } from "next/server";
 import { safeQuery } from "@/lib/db";
 import { enrich_with_h3 } from "@/core/h3_utils";
+
+export const dynamic = "force-dynamic";
 import * as h3 from "h3-js";
 import {
   getKRingCells,

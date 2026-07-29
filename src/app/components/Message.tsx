@@ -2,6 +2,7 @@
 import React, { useMemo, useState, useEffect } from "react";
 import { marked } from "marked";
 import { Like1Icon, DislikeIcon, Refresh2Icon, CopyIcon, TickCircleIcon, Edit2Icon, LocationIcon } from "./icons";
+import { Button } from "@/components/ui/button";
 
 interface MessageProps {
   role: "user" | "assistant";
@@ -51,23 +52,26 @@ export default function Message({ role, content, isStreaming, onEdit }: MessageP
                   autoFocus
                 />
                 <div className="flex justify-end gap-2">
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() => { setIsEditing(false); setEditContent(content); }}
-                    className="px-3 py-1.5 text-sm text-zinc-500 hover:text-zinc-700 hover:bg-zinc-100 rounded-lg transition-colors"
+                    className="text-zinc-500 hover:text-zinc-700 hover:bg-zinc-100 transition-colors"
                   >
                     Cancel
-                  </button>
-                  <button
+                  </Button>
+                  <Button
+                    size="sm"
                     onClick={() => {
                       setIsEditing(false);
                       if (editContent.trim() !== content && editContent.trim()) {
                         onEdit?.(editContent.trim());
                       }
                     }}
-                    className="px-3 py-1.5 text-sm bg-blue-500 text-white hover:bg-blue-600 rounded-lg transition-colors"
+                    className="bg-blue-500 text-white hover:bg-blue-600 transition-colors"
                   >
                     Save &amp; Submit
-                  </button>
+                  </Button>
                 </div>
               </div>
             ) : (
@@ -89,13 +93,15 @@ export default function Message({ role, content, isStreaming, onEdit }: MessageP
                   )}
                 </span>
                 {!isStreaming && onEdit && (
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     onClick={() => setIsEditing(true)}
-                    className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-zinc-700 transition-all p-1 -mr-2 -mt-1 rounded hover:bg-zinc-200"
+                    className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-zinc-700 transition-all -mr-2 -mt-1 h-8 w-8 hover:bg-zinc-200"
                     title="Edit message"
                   >
                     <Edit2Icon size={15} />
-                  </button>
+                  </Button>
                 )}
               </div>
             )}
@@ -129,22 +135,24 @@ export default function Message({ role, content, isStreaming, onEdit }: MessageP
         {/* Feedback / action row */}
         {!isStreaming && content && (
           <div className="flex items-center gap-2 mt-3 ml-2">
-            <div className="flex items-center bg-zinc-50 rounded-full border border-zinc-100 p-1">
-              <button className="p-1.5 text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 rounded-full transition-colors" title="Helpful">
-                <Like1Icon size={18} />
-              </button>
-              <button className="p-1.5 text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 rounded-full transition-colors" title="Not helpful">
-                <DislikeIcon size={18} />
-              </button>
-              <button className="p-1.5 text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 rounded-full transition-colors" title="Regenerate">
-                <Refresh2Icon size={18} />
-              </button>
+            <div className="flex items-center bg-zinc-50 rounded-full border border-zinc-100 p-0.5">
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 rounded-full transition-colors" title="Helpful">
+                <Like1Icon size={16} />
+              </Button>
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 rounded-full transition-colors" title="Not helpful">
+                <DislikeIcon size={16} />
+              </Button>
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 rounded-full transition-colors" title="Regenerate">
+                <Refresh2Icon size={16} />
+              </Button>
             </div>
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={handleCopy}
-              className={`p-2 rounded-full transition-colors ${
+              className={`h-9 w-9 rounded-full transition-colors ${
                 copied
-                  ? "text-green-500 bg-green-50"
+                  ? "text-green-500 bg-green-50 hover:bg-green-100 hover:text-green-600"
                   : "text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100"
               }`}
               title={copied ? "Copied!" : "Copy text"}
@@ -154,7 +162,7 @@ export default function Message({ role, content, isStreaming, onEdit }: MessageP
               ) : (
                 <CopyIcon size={16} />
               )}
-            </button>
+            </Button>
           </div>
         )}
       </div>

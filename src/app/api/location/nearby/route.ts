@@ -2,6 +2,8 @@
 import { NextResponse } from "next/server";
 import { safeQuery } from "@/lib/db";
 
+export const dynamic = "force-dynamic";
+
 /**
  * Haversine distance in metres (fallback when PostGIS is not available).
  */

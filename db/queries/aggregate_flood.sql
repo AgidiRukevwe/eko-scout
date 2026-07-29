@@ -5,9 +5,9 @@
  * Applies a 2-layer scoring model:
  * Layer 1: Baseline flood score derived from LGA.
  * Layer 2: Score boost (+20) if the hex intersects a known flood-prone community.
+ *
+ * Safe to re-run: uses ON CONFLICT DO UPDATE for incremental per-area ingestion.
  */
-
-TRUNCATE TABLE h3_r9_flood;
 
 WITH baseline AS (
     -- Maps the raw percentages to the base score (Layer 1)

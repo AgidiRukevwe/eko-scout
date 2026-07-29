@@ -39,6 +39,22 @@ def load_env_files():
             except Exception as e:
                 print(f"Error loading {filename}: {e}")
 
+
+# Lagos land bounding box — used to validate geocoded coordinates.
+# Excludes Lagos Lagoon, Atlantic Ocean, and locations outside Lagos state.
+# Conservative bounds: clipping is preferable to placing feeders in water.
+LAGOS_LAT_MIN, LAGOS_LAT_MAX = 6.35, 6.70
+LAGOS_LNG_MIN, LAGOS_LNG_MAX = 3.05, 3.75
+
+
+def is_within_lagos(lat: float, lng: float) -> bool:
+    """Return True if the coordinate falls within the Lagos land bounding box."""
+    return (
+        LAGOS_LAT_MIN <= lat <= LAGOS_LAT_MAX
+        and LAGOS_LNG_MIN <= lng <= LAGOS_LNG_MAX
+    )
+
+
 # Helper with exponential backoff for robust geocoding
 @backoff.on_exception(backoff.expo,
                       (GeocoderTimedOut, GeocoderServiceError, GeocoderQuotaExceeded),
@@ -269,6 +285,14 @@ def run_loader(input_file, db_url):
 
             if lat is None or lng is None:
                 print(f" -> ERROR: Could not resolve coordinates for {feeder_code}. Using default Lagos location.")
+                lat, lng = 6.5244, 3.3792
+
+            # Validate that the resolved coordinate falls on Lagos land.
+            # Geocoding can occasionally resolve feeder names to the lagoon or ocean
+            # due to ambiguous location strings. Fall back to city centre if so.
+            if not is_within_lagos(lat, lng):
+                print(f" -> WARNING: Geocoded coordinate ({lat:.4f}, {lng:.4f}) is outside Lagos land bbox. "
+                      f"Falling back to city centre for {feeder_code}.")
                 lat, lng = 6.5244, 3.3792
 
             # 4. H3 Hexagon Resolution 9 Mapping

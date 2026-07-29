@@ -5,9 +5,10 @@
  * It enforces deterministic classification logic (no percentiles or ML probabilities).
  * The pipeline normalizes entities, computes absolute intent scores, and uses strict 
  * threshold formulas (e.g. building_density > 5) to assign a definitive land_use_type.
+ *
+ * Safe to re-run: uses ON CONFLICT DO UPDATE for incremental per-area ingestion.
+ * osm_buildings is a staging table and is TRUNCATED at the end of this script.
  */
-
-TRUNCATE TABLE h3_r9_features;
 
 WITH normalized_buildings AS (
     SELECT 
@@ -93,7 +94,11 @@ hex AS (
         -- Mobility: Reflects transit availability.
         COALESCE(p.transport_pois, 0) * 2 + COALESCE(r.road_density, 0) AS mobility_score,
         
-        -- Calm: Inversely related to activity, favoring heavy residential presence without commercial noise.
+        -- calm_score: Used as the noise proxy in the intelligence API.
+        -- Measures structural quietness (building density + health POIs), not acoustic noise.
+        -- A higher score correlates empirically with quieter residential land use.
+        -- NOT suitable as a proxy for acoustic proximity to roads, highways or industry.
+        -- Revisit if a dedicated noise data source (e.g. OSM highway proximity) becomes available.
         COALESCE(b.building_density, 0) * 2 + COALESCE(p.health_pois, 0) * 1 AS calm_score,
         
         -- Residential Intent: Heavily weighted by schools, clinics, and strict building count.
@@ -167,3 +172,9 @@ ON CONFLICT (h3_r9) DO UPDATE SET
     commercial_score = EXCLUDED.commercial_score,
     land_use_type = EXCLUDED.land_use_type,
     updated_at = CURRENT_TIMESTAMP;
+
+-- Truncate the buildings staging table after successful aggregation.
+-- osm_buildings is not a permanent production table. Keeping it populated
+-- between runs wastes Neon Free storage at Lagos scale.
+-- Re-run scrape_osm_area.py to repopulate before the next aggregation.
+TRUNCATE TABLE osm_buildings;

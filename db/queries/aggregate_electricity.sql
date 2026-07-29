@@ -5,9 +5,9 @@
  * It mandates deterministic aggregation: No probabilities or ML distributions.
  * The output for each cell is a single Dominant Band (with tie breakers) and
  * an absolute Confidence Label based purely on raw agreement metrics.
+ *
+ * Safe to re-run: uses ON CONFLICT DO UPDATE for incremental per-area ingestion.
  */
-
-TRUNCATE TABLE electricity_h3_features;
 
 WITH raw_bands AS (
     SELECT 

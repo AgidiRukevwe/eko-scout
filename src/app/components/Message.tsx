@@ -9,23 +9,41 @@ interface MessageProps {
   content: string;
   isStreaming?: boolean;
   onEdit?: (newContent: string) => void;
+  onSuggestionSelect?: (candidate: any) => void;
 }
 
 marked.setOptions({ breaks: true, gfm: true });
 
-export default function Message({ role, content, isStreaming, onEdit }: MessageProps) {
+export default function Message({ role, content, isStreaming, onEdit, onSuggestionSelect }: MessageProps) {
   const isUser = role === "user";
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(content);
+  const [suggestions, setSuggestions] = useState<any[]>([]);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     setEditContent(content);
   }, [content]);
 
+  // Parse location suggestions token
+  useEffect(() => {
+    const match = content.match(/\[\[LOCATION_SUGGESTIONS:\s*(\[.*?\])\]\]/s);
+    if (match) {
+      try {
+        const arr = JSON.parse(match[1]);
+        setSuggestions(arr);
+      } catch (e) {
+        console.error('Failed to parse location suggestions', e);
+      }
+    } else {
+      setSuggestions([]);
+    }
+  }, [content]);
+
   const html = useMemo(() => {
     if (isUser) return null;
-    return marked.parse(content) as string;
+    const cleanContent = content.replace(/\[\[LOCATION_SUGGESTIONS:.*?\]\]/s, '');
+    return marked.parse(cleanContent) as string;
   }, [isUser, content]);
 
   const handleCopy = () => {
@@ -35,13 +53,11 @@ export default function Message({ role, content, isStreaming, onEdit }: MessageP
     });
   };
 
-  if (isUser) {
-    return (
-      <div className="flex justify-end mb-6">
-        <div className="flex flex-col max-w-xs md:max-w-xl lg:max-w-2xl">
-          <div className={`px-4 py-3 text-[0.95rem] leading-relaxed relative group ${
-            isEditing ? "w-full min-w-[300px]" : "bg-zinc-50 text-zinc-800 rounded-3xl whitespace-pre-wrap"
-          }`}>
+  return (
+    <div className={isUser ? "flex justify-end mb-6" : "flex justify-start mb-6"}>
+      <div className="flex flex-col max-w-xs md:max-w-xl lg:max-w-2xl">
+        {isUser ? (
+          <div className={`px-4 py-3 text-[0.95rem] leading-relaxed relative group ${isEditing ? "w-full min-w-[300px]" : "bg-zinc-50 text-zinc-800 rounded-3xl whitespace-pre-wrap"}`}>
             {isEditing ? (
               <div className="flex flex-col gap-2 w-full">
                 <textarea
@@ -52,72 +68,32 @@ export default function Message({ role, content, isStreaming, onEdit }: MessageP
                   autoFocus
                 />
                 <div className="flex justify-end gap-2">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => { setIsEditing(false); setEditContent(content); }}
-                    className="text-zinc-500 hover:text-zinc-700 hover:bg-zinc-100 transition-colors"
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    size="sm"
-                    onClick={() => {
-                      setIsEditing(false);
-                      if (editContent.trim() !== content && editContent.trim()) {
-                        onEdit?.(editContent.trim());
-                      }
-                    }}
-                    className="bg-blue-500 text-white hover:bg-blue-600 transition-colors"
-                  >
-                    Save &amp; Submit
-                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => { setIsEditing(false); setEditContent(content); }} className="text-zinc-500 hover:text-zinc-700 hover:bg-zinc-100 transition-colors">Cancel</Button>
+                  <Button size="sm" onClick={() => { setIsEditing(false); if (editContent.trim() !== content && editContent.trim()) { onEdit?.(editContent.trim()); } }} className="bg-blue-500 text-white hover:bg-blue-600 transition-colors">Save & Submit</Button>
                 </div>
               </div>
             ) : (
               <div className="flex items-start justify-between gap-4">
-                <span>
-                  {content.split(/(@[a-zA-Z0-9\s,-]+)/g).map((part, i) => {
-                    if (part.startsWith('@')) {
-                      return (
-                        <span key={i} className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 border border-blue-200 rounded-full px-2 py-px mx-0.5 text-[0.85rem] font-medium align-middle">
-                          <LocationIcon size={12} className="opacity-70" />
-                          {part.slice(1)}
-                        </span>
-                      );
-                    }
-                    return <React.Fragment key={i}>{part}</React.Fragment>;
-                  })}
-                  {isStreaming && (
-                    <span className="inline-block w-0.5 h-4 ml-0.5 align-middle bg-zinc-800/50 animate-pulse rounded" />
-                  )}
-                </span>
-                {!isStreaming && onEdit && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => setIsEditing(true)}
-                    className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-zinc-700 transition-all -mr-2 -mt-1 h-8 w-8 hover:bg-zinc-200"
-                    title="Edit message"
-                  >
+                <span>{content.split(/(@[a-zA-Z0-9\s,-]+)/g).map((part, i) => {
+                  if (part.startsWith('@')) {
+                    return (
+                      <span key={i} className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 border border-blue-200 rounded-full px-2 py-px mx-0.5 text-[0.85rem] font-medium align-middle">
+                        <LocationIcon size={12} className="opacity-70" />{part.slice(1)}
+                      </span>
+                    );
+                  }
+                  return <React.Fragment key={i}>{part}</React.Fragment>;
+                })}
+                {isStreaming && (<span className="inline-block w-0.5 h-4 ml-0.5 align-middle bg-zinc-800/50 animate-pulse rounded" />)}
+              </span>
+                {onEdit && (
+                  <Button variant="ghost" size="icon" onClick={() => setIsEditing(true)} className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-zinc-700 transition-all -mr-2 -mt-1 h-8 w-8 hover:bg-zinc-200" title="Edit message">
                     <Edit2Icon size={15} />
                   </Button>
                 )}
               </div>
             )}
           </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Assistant message ──
-  return (
-    <div className="flex justify-start mb-6">
-      <div className="flex flex-col max-w-xs md:max-w-xl lg:max-w-2xl">
-        {/* Avatar stacked above the message */}
-        <span className="mb-2 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-cyan-400 to-blue-500 shadow-sm" />
-
         <div className="px-4 py-3 text-[0.95rem] leading-relaxed text-zinc-800 prose-message w-full">
           {content ? (
             <div
@@ -131,6 +107,23 @@ export default function Message({ role, content, isStreaming, onEdit }: MessageP
             <span className="inline-block w-0.5 h-4 ml-0.5 align-middle bg-zinc-400 animate-pulse rounded" />
           )}
         </div>
+
+        {/* Location Suggestions */}
+        {!isStreaming && suggestions.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-2 ml-4">
+            {suggestions.map((c, i) => (
+              <Button 
+                key={i} 
+                variant="outline" 
+                size="sm" 
+                className="rounded-full shadow-sm"
+                onClick={() => onSuggestionSelect?.(c)}
+              >
+                {c.label}
+              </Button>
+            ))}
+          </div>
+        )}
 
         {/* Feedback / action row */}
         {!isStreaming && content && (

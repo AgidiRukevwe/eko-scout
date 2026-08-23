@@ -24,9 +24,17 @@ except Exception as e:
 
 def get_connection():
     if db_pool:
+        # Before returning, we could test it, but it's often better to just try/except
         return db_pool.getconn()
     raise Exception("Database connection pool is not initialized")
 
 def release_connection(conn):
     if db_pool and conn:
         db_pool.putconn(conn)
+
+def get_fresh_connection():
+    """Bypasses the pool and creates a brand new direct connection.
+    Useful for long-running scripts where pooled connections might get closed 
+    by Neon's aggressive idle timeouts.
+    """
+    return psycopg2.connect(config.DATABASE_URL)

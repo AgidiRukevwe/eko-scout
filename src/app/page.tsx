@@ -23,9 +23,13 @@ export default function Home() {
 
   // Stable ref so handleSend closure always sees the latest messages
   const messagesRef = useRef<ChatMessage[]>([]);
+  const activeLocationsRef = useRef<Location[]>([]);
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+  useEffect(() => {
+    activeLocationsRef.current = activeLocations;
+  }, [activeLocations]);
 
   // Called immediately when the user picks a location from the @ dropdown
   const handleLocationSelect = useCallback((loc: Location) => {
@@ -125,6 +129,25 @@ export default function Home() {
     [isSending, activeLocations]
   );
 
+  const handleSuggestionSelect = useCallback((candidate: any) => {
+    const loc: Location = {
+      name: candidate.label,
+      lat: candidate.lat,
+      lng: candidate.lng,
+      category: "place",
+    };
+    
+    const currentLocs = activeLocationsRef.current;
+    const newLocs = currentLocs.some(l => l.name === loc.name) ? currentLocs : [...currentLocs, loc];
+    
+    const lastUserMsg = messagesRef.current.slice().reverse().find(m => m.role === "user");
+    if (lastUserMsg) {
+      handleSend(lastUserMsg.content, newLocs);
+    } else {
+      setActiveLocations(newLocs);
+    }
+  }, [handleSend]);
+
   return (
     <main className="flex flex-col h-screen bg-white text-zinc-900">
       {/* Header */}
@@ -152,6 +175,7 @@ export default function Home() {
               handleSend(content, null);
             }
           }}
+          onSuggestionSelect={handleSuggestionSelect}
         />
       </div>
       

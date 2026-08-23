@@ -108,10 +108,12 @@ function buildSystemPrompt(
   globalData: any
 ): string {
   const persona = `You are EkoScout 🏙️ — a trusted local analyst and data-driven guide for housing decisions in Lagos, Nigeria.
-Your role is to help users make informed decisions about living, working, or renting in Lagos based on real location intelligence data.
+Your role is to help users make informed decisions about living, working, or renting in Lagos based ONLY on the provided location intelligence data.
 
-CONVERSATION STYLE:
+CONVERSATION STYLE & RULES:
 - Be concise, practical, and decision-focused. The ideal response length for most questions is 2–5 sentences.
+- NEVER invent or hallucinate data. If you are not provided with data for a specific location in this prompt, explicitly state that you need the user to pin the location to check the data.
+- NEVER guess electricity bands, distances, or amenities based on your internal training data. Lagos is dynamic and your internal data is likely outdated or wrong.
 - Answer the user's specific question first, then provide only the most relevant supporting information.
 - Prioritize insights over raw metrics. Translate technical data into real-world implications (e.g., "This is a predominantly residential area with relatively low traffic and a quieter environment than nearby commercial districts.").
 - Keep responses conversational and natural. Avoid filler, unnecessary follow-up questions, and generic Lagos commentary.
@@ -149,7 +151,8 @@ CONVERSATION STYLE:
 
   if (locationData.length === 0) {
     return `${persona}${prioritySection}${globalSection}
-No location is pinned yet. You can answer global questions using the Global Lagos Intelligence above. To get specific data, guide the user to type @ and select a Lagos neighbourhood or use their Current Location.`;
+CRITICAL INSTRUCTION: No location is pinned yet. You can answer general questions using the Global Lagos Intelligence above. 
+HOWEVER, if the user asks about a specific street, neighbourhood, or place, DO NOT hallucinate or guess the power band, amenities, or environmental data. You MUST call the 'search_locations' tool. Once you receive the tool response with the location intelligence data, use it to answer the question directly. DO NOT provide any metrics, bands, or distances from your internal knowledge.`;
   }
 
   let intelligenceSection = "";
@@ -330,7 +333,7 @@ ${intelligenceSection}
    - Band A = 20+ h/day | Band B = 16–20 | Band C = 12–16 | Band D = 8–12 | Band E = 4–8
    Example: "This area is Band B — typically 16–20 hours of electricity daily."
 7. Prioritize recognizable landmarks (e.g. University of Lagos, National Stadium) over unnamed POIs.
-8. Never invent data not shown above. State explicitly when something is not in the dataset.
+8. NEVER invent or hallucinate data that is not explicitly shown in the sections above. If the user asks for information not provided in the data, state explicitly that you don't have it in your current dataset.
 
 Response hierarchy for amenity questions:
 • Places on the same street → walking distance → wider neighbourhood → distance-only fallback.`;
@@ -479,21 +482,110 @@ export async function POST(req: Request) {
           { role: "user", content: message },
         ];
 
+        const tools: OpenAI.Chat.ChatCompletionTool[] = [
+          {
+            type: "function",
+            function: {
+              name: "search_locations",
+              description: "Call this when the user asks about a specific location, neighborhood, or street, but hasn't pinned one yet. It returns location candidates.",
+              parameters: {
+                type: "object",
+                properties: {
+                  query: {
+                    type: "string",
+                    description: "The name of the location to search for (e.g., 'Yaba', 'Ikeja', 'Bode Thomas Street')",
+                  },
+                },
+                required: ["query"],
+              },
+            },
+          },
+        ];
+
         const responseStream = await openai.chat.completions.create({
           model: "gpt-4o",
           messages: apiMessages,
           temperature: 0.75,
           max_tokens: 1000,
           stream: true,
+          tools: activeLocations.length === 0 ? tools : undefined,
         });
 
         const encoder = new TextEncoder();
         const stream = new ReadableStream({
           async start(controller) {
+            let isToolCall = false;
+            let toolCallName = "";
+            let toolCallArgs = "";
+
             for await (const chunk of responseStream) {
-              const delta = chunk.choices[0]?.delta?.content;
-              if (delta) controller.enqueue(encoder.encode(delta));
+              const delta = chunk.choices[0]?.delta;
+              if (delta?.tool_calls) {
+                isToolCall = true;
+                if (delta.tool_calls[0].function?.name) {
+                  toolCallName += delta.tool_calls[0].function.name;
+                }
+                if (delta.tool_calls[0].function?.arguments) {
+                  toolCallArgs += delta.tool_calls[0].function.arguments;
+                }
+              } else if (delta?.content && !isToolCall) {
+                controller.enqueue(encoder.encode(delta.content));
+              }
             }
+
+            if (isToolCall && toolCallName === "search_locations") {
+              try {
+                const args = JSON.parse(toolCallArgs);
+                const { executeLocationSearch } = await import("@/lib/locationSearch");
+                const candidates = await executeLocationSearch(args.query);
+                
+                if (candidates.length > 0) {
+                  const top = candidates[0];
+                  
+                  // Fetch live intelligence for the top candidate
+                  const [intelligence, nearby] = await Promise.all([
+                    fetchIntelligence(top.lat, top.lng, origin),
+                    fetchNearby(top.lat, top.lng, origin),
+                  ]);
+
+                  // Build a new system prompt as if the user had pinned this location
+                  const fakeResolvedLoc = { name: top.label, lat: top.lat, lng: top.lng, category: top.type };
+                  const fakeLocationData = [{ location: fakeResolvedLoc, intelligence, nearby }];
+                  const newSystemPrompt = buildSystemPrompt(priorities, fakeLocationData, globalData);
+
+                  const secondApiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+                    { role: "system", content: newSystemPrompt },
+                    ...apiMessages.slice(1) // exclude old system prompt
+                  ];
+
+                  // Prefix the response to let the user know what we assumed
+                  controller.enqueue(encoder.encode(`*(Answering for **${top.label}**)*\n\n`));
+
+                  // Call OpenAI again to answer using the real data
+                  const secondStream = await openai.chat.completions.create({
+                    model: "gpt-4o",
+                    messages: secondApiMessages,
+                    temperature: 0.75,
+                    max_tokens: 1000,
+                    stream: true,
+                  });
+
+                  for await (const chunk of secondStream) {
+                    const delta = chunk.choices[0]?.delta?.content;
+                    if (delta) controller.enqueue(encoder.encode(delta));
+                  }
+
+                  // Append the suggestions block for the UI to render the alternatives
+                  controller.enqueue(encoder.encode(`\n\n[[LOCATION_SUGGESTIONS: ${JSON.stringify(candidates)}]]`));
+                } else {
+                  controller.enqueue(encoder.encode(`I couldn't find any location matching "**${args.query}**". Could you clarify?`));
+                }
+              } catch (e) {
+                console.error("Tool execution error:", e);
+                controller.enqueue(encoder.encode("I couldn't search for that location right now. Please type '@' to pin it manually."));
+              }
+            }
+
             controller.close();
           },
           async cancel() {

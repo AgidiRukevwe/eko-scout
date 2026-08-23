@@ -13,9 +13,10 @@ type Props = {
   messages: ChatMessage[];
   onPromptClick?: (prompt: string) => void;
   onEditMessage?: (msgId: string, newContent: string) => void;
+  onSuggestionSelect?: (candidate: any) => void;
 };
 
-export const ChatWindow: React.FC<Props> = ({ messages, onPromptClick, onEditMessage }) => {
+export const ChatWindow: React.FC<Props> = ({ messages, onPromptClick, onEditMessage, onSuggestionSelect }) => {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to the newest message whenever messages or content changes
@@ -68,6 +69,7 @@ export const ChatWindow: React.FC<Props> = ({ messages, onPromptClick, onEditMes
           content={msg.content}
           isStreaming={msg.isStreaming}
           onEdit={(newContent) => onEditMessage?.(msg.id, newContent)}
+          onSuggestionSelect={onSuggestionSelect}
         />
       ))}
     </div>
